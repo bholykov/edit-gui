@@ -15,6 +15,24 @@ use crate::oklab::StraightRgba;
 use crate::simd::{MemsetSafe, memset};
 use crate::unicode::MeasurementConfig;
 
+/// Represents a single cell in the framebuffer for GPU rendering.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FramebufferCell {
+    /// The character in this cell (space for empty cells)
+    pub ch: char,
+    /// The foreground color
+    pub fg: StraightRgba,
+    /// The background color
+    pub bg: StraightRgba,
+    /// Text attributes (italic, underline)
+    pub attrs: Attributes,
+    /// X coordinate (column)
+    pub x: CoordType,
+    /// Y coordinate (row)
+    pub y: CoordType,
+}
+
 // Same constants as used in the PCG family of RNGs.
 #[cfg(target_pointer_width = "32")]
 const HASH_MULTIPLIER: usize = 747796405; // https://doi.org/10.1090/S0025-5718-99-00996-5, Table 5
@@ -403,6 +421,19 @@ impl Framebuffer {
         let back = &mut self.buffers[self.frame_counter & 1];
         back.cursor.pos = pos;
         back.cursor.overtype = overtype;
+    }
+
+    /// Returns an iterator over all cells in the current back buffer.
+    /// This is used for GPU rendering instead of VT sequence generation.
+    pub fn cells(&self) -> CellIterator<'_> {
+        let back = &self.buffers[self.frame_counter & 1];
+        CellIterator {
+            back,
+            x: 0,
+            y: 0,
+            char_indices: None,
+            current_line_str: "",
+        }
     }
 
     /// Renders the framebuffer contents accumulated since the
@@ -807,7 +838,7 @@ impl Bitmap {
 ///
 /// It being a bitfield allows for simple diffing.
 #[repr(transparent)]
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Attributes(u8);
 
 #[allow(non_upper_case_globals)]
@@ -903,5 +934,144 @@ impl Cursor {
 
     const fn new_disabled() -> Self {
         Self { pos: Point { x: -1, y: -1 }, overtype: false }
+    }
+}
+
+/// Iterator over cells in a framebuffer.
+pub struct CellIterator<'a> {
+    back: &'a Buffer,
+    x: CoordType,
+    y: CoordType,
+    char_indices: Option<std::str::CharIndices<'a>>,
+    current_line_str: &'a str,
+}
+
+impl<'a> Iterator for CellIterator<'a> {
+    type Item = FramebufferCell;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Check if we've iterated through all rows
+        if self.y >= self.back.text.size.height {
+            return None;
+        }
+
+        let width = self.back.text.size.width as usize;
+        let stride = width;
+        let idx = (self.y as usize) * stride + (self.x as usize);
+
+        // Get color and attribute data for this cell
+        let bg = self.back.bg_bitmap.data.get(idx).copied().unwrap_or(StraightRgba::zero());
+        let fg = self.back.fg_bitmap.data.get(idx).copied().unwrap_or(StraightRgba::zero());
+        let attrs = self.back.attributes.data.get(idx).copied().unwrap_or(Attributes::None);
+
+        // Get the character for this cell
+        // Initialize char_indices if we're at the start of a new line
+        if self.char_indices.is_none() {
+            if let Some(line) = self.back.text.lines.get(self.y as usize) {
+                self.current_line_str = line;
+                self.char_indices = Some(line.char_indices());
+            }
+        }
+
+        // Get the next character or use space as default
+        let ch = if let Some(ref mut indices) = self.char_indices {
+            if let Some((_byte_idx, c)) = indices.next() {
+                c
+            } else {
+                ' '
+            }
+        } else {
+            ' '
+        };
+
+        let cell = FramebufferCell {
+            ch,
+            fg,
+            bg,
+            attrs,
+            x: self.x,
+            y: self.y,
+        };
+
+        // Move to next cell
+        self.x += 1;
+        if self.x >= self.back.text.size.width {
+            self.x = 0;
+            self.y += 1;
+            self.char_indices = None; // Reset for next line
+        }
+
+        Some(cell)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cells_iterator_basic() {
+        let mut fb = Framebuffer::new();
+        let size = Size { width: 10, height: 3 };
+        fb.flip(size);
+
+        // Add some text to the framebuffer
+        fb.replace_text(0, 0, 10, "Hello");
+        fb.replace_text(1, 0, 10, "World");
+
+        // Set some colors
+        fb.blend_bg(
+            Rect { left: 0, top: 0, right: 5, bottom: 1 },
+            StraightRgba::from_be(0xFF0000FF), // Red background
+        );
+        fb.blend_fg(
+            Rect { left: 0, top: 0, right: 5, bottom: 1 },
+            StraightRgba::from_be(0xFFFFFFFF), // White foreground
+        );
+
+        // Iterate through cells
+        let cells: Vec<FramebufferCell> = fb.cells().collect();
+
+        // Should have width * height cells
+        assert_eq!(cells.len(), (size.width * size.height) as usize);
+
+        // Check that we got the right number of cells per row
+        let first_row: Vec<&FramebufferCell> = cells.iter().filter(|c| c.y == 0).collect();
+        assert_eq!(first_row.len(), size.width as usize);
+
+        // Verify some characters from first line
+        let first_line_chars: String = cells.iter()
+            .filter(|c| c.y == 0)
+            .take(5)
+            .map(|c| c.ch)
+            .collect();
+        assert_eq!(first_line_chars, "Hello");
+
+        println!("✓ Cell iterator test passed!");
+    }
+
+    #[test]
+    fn test_cells_iterator_colors() {
+        let mut fb = Framebuffer::new();
+        let size = Size { width: 5, height: 2 };
+        fb.flip(size);
+
+        // Set a specific background color
+        let test_color = StraightRgba::from_be(0x00FF00FF); // Green
+        fb.blend_bg(
+            Rect { left: 2, top: 1, right: 4, bottom: 2 },
+            test_color,
+        );
+
+        let cells: Vec<FramebufferCell> = fb.cells().collect();
+
+        // Find cells at position (2,1) and (3,1) - they should have the green background
+        let cell_2_1 = cells.iter().find(|c| c.x == 2 && c.y == 1).unwrap();
+        let cell_3_1 = cells.iter().find(|c| c.x == 3 && c.y == 1).unwrap();
+
+        assert_eq!(cell_2_1.bg, test_color);
+        assert_eq!(cell_3_1.bg, test_color);
+
+        println!("✓ Cell color test passed!");
     }
 }

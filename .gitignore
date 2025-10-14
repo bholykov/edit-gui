@@ -3,3 +3,9 @@
 *.profraw
 lcov.info
 target
+
+# macOS build artifacts
+macos/EditMacBin
+macos/EditMac.app/
+macos/.DS_Store
+.DS_Store

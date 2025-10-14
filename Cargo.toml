@@ -10,6 +10,9 @@ license = "MIT"
 categories = ["text-editors"]
 build = "build/main.rs"
 
+[lib]
+crate-type = ["rlib", "staticlib"]
+
 [[bench]]
 name = "lib"
 harness = false
@@ -35,6 +38,10 @@ codegen-units = 16          # Make compiling criterion faster (16 is the default
 lto = "thin"                # Similarly, speed up linking by a ton
 
 [dependencies]
+# GPU rendering dependencies
+wgpu = "22.0"
+bytemuck = { version = "1.14", features = ["derive"] }
+fontdue = "0.9"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
