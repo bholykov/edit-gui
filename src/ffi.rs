@@ -312,8 +312,16 @@ pub extern "C" fn edit_new_file(state: *mut EditState) {
 
     let state = unsafe { &mut *state };
 
-    // TODO: Implement new file logic
-    state.framebuffer.flip(state.window_size);
+    // Create a new empty document
+    match TextBuffer::new_rc(true) {
+        Ok(buf) => {
+            state.document = Some(buf);
+            eprintln!("✓ New file created");
+        }
+        Err(e) => {
+            eprintln!("✗ Failed to create new file: {:?}", e);
+        }
+    }
 }
 
 /// Opens a file at the given path.
@@ -326,23 +334,38 @@ pub extern "C" fn edit_open_file(state: *mut EditState, path: *const c_char) {
     let state = unsafe { &mut *state };
     let path_str = unsafe { CStr::from_ptr(path) }.to_string_lossy();
 
-    // TODO: Implement file opening logic
-    println!("Opening file: {}", path_str);
+    eprintln!("Opening file: {}", path_str);
 
-    state.framebuffer.flip(state.window_size);
-}
+    // Create a new buffer and load the file
+    match TextBuffer::new_rc(true) {
+        Ok(buf) => {
+            let mut tb = buf.borrow_mut();
 
-/// Saves the current file.
-#[unsafe(no_mangle)]
-pub extern "C" fn edit_save_file(state: *mut EditState) {
-    if state.is_null() {
-        return;
+            // Try to open and read the file
+            match std::fs::File::open(path_str.as_ref()) {
+                Ok(mut file) => {
+                    match tb.read_file(&mut file, None) {
+                        Ok(_) => {
+                            drop(tb);
+                            state.document = Some(buf);
+                            eprintln!("✓ File loaded successfully");
+                        }
+                        Err(e) => {
+                            eprintln!("✗ Failed to read file: {:?}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("✗ Failed to open file: {:?}", e);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("✗ Failed to create TextBuffer: {:?}", e);
+        }
     }
-
-    let _state = unsafe { &mut *state };
-
-    // TODO: Implement file saving logic
 }
+
 
 /// Saves the current file to a new path.
 #[unsafe(no_mangle)]
@@ -351,11 +374,32 @@ pub extern "C" fn edit_save_file_as(state: *mut EditState, path: *const c_char) 
         return;
     }
 
-    let _state = unsafe { &mut *state };
+    let state = unsafe { &mut *state };
     let path_str = unsafe { CStr::from_ptr(path) }.to_string_lossy();
 
-    // TODO: Implement save-as logic
-    println!("Saving file to: {}", path_str);
+    eprintln!("Saving file to: {}", path_str);
+
+    if let Some(doc) = &state.document {
+        let mut tb = doc.borrow_mut();
+
+        match std::fs::File::create(path_str.as_ref()) {
+            Ok(mut file) => {
+                match tb.write_file(&mut file) {
+                    Ok(_) => {
+                        eprintln!("✓ File saved successfully");
+                    }
+                    Err(e) => {
+                        eprintln!("✗ Failed to write file: {:?}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("✗ Failed to create file: {:?}", e);
+            }
+        }
+    } else {
+        eprintln!("✗ No document to save");
+    }
 }
 
 /// Handles window resize.

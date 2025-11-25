@@ -28,6 +28,11 @@ class EditView: NSView {
         MenuItem(title: "Help", items: ["Getting Started", "About..."])
     ]
 
+    // File management
+    private var currentFilePath: String?
+    private var fileMonitor: DispatchSourceFileSystemObject?
+    private var fileDescriptor: Int32 = -1
+
     override var isFlipped: Bool {
         return true  // Use top-left origin for easier text drawing
     }
@@ -35,6 +40,9 @@ class EditView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         // wantsLayer = true  // DISABLED - causes draw() to not display properly
+
+        // Register for drag & drop
+        registerForDraggedTypes([.fileURL])
     }
 
     required init?(coder: NSCoder) {
@@ -75,10 +83,69 @@ class EditView: NSView {
         cursorBlinkTimer?.invalidate()
         cursorBlinkTimer = nil
 
+        stopFileMonitoring()
+
         if let state = editState {
             edit_destroy(state)
             editState = nil
         }
+    }
+
+    // MARK: - File Operations
+
+    func newFile() {
+        guard let state = editState else { return }
+        edit_new_file(state)
+        currentFilePath = nil
+        setNeedsDisplay(bounds)
+    }
+
+    func openFile(path: String) {
+        guard let state = editState else { return }
+        path.withCString { cPath in
+            edit_open_file(state, cPath)
+        }
+        currentFilePath = path
+        window?.title = "Edit - \((path as NSString).lastPathComponent)"
+
+        // Start file monitoring
+        startFileMonitoring(path: path)
+
+        // Add to recent files
+        NSDocumentController.shared.noteNewRecentDocumentURL(URL(fileURLWithPath: path))
+
+        setNeedsDisplay(bounds)
+    }
+
+    func saveFile() {
+        guard let state = editState else { return }
+
+        if let path = currentFilePath {
+            // Save to existing file
+            path.withCString { cPath in
+                edit_save_file_as(state, cPath)
+            }
+        } else {
+            // No file path, trigger Save As
+            if let controller = window?.windowController?.document as? NSDocument {
+                controller.runModalSavePanel(for: .saveOperation, delegate: self, didSave: nil, contextInfo: nil)
+            }
+        }
+    }
+
+    func saveFileAs(path: String) {
+        guard let state = editState else { return }
+        path.withCString { cPath in
+            edit_save_file_as(state, cPath)
+        }
+        currentFilePath = path
+        window?.title = "Edit - \((path as NSString).lastPathComponent)"
+
+        // Start file monitoring for the new file
+        startFileMonitoring(path: path)
+
+        // Add to recent files
+        NSDocumentController.shared.noteNewRecentDocumentURL(URL(fileURLWithPath: path))
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -402,6 +469,82 @@ class EditView: NSView {
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
+
+    // MARK: - File Monitoring
+
+    func startFileMonitoring(path: String) {
+        // Stop any existing monitoring
+        stopFileMonitoring()
+
+        // Open file descriptor for monitoring
+        fileDescriptor = open(path, O_EVTONLY)
+        guard fileDescriptor >= 0 else {
+            print("Failed to open file descriptor for monitoring: \(path)")
+            return
+        }
+
+        // Create dispatch source for file system events
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fileDescriptor,
+            eventMask: [.write, .delete, .rename],
+            queue: DispatchQueue.main
+        )
+
+        source.setEventHandler { [weak self] in
+            self?.handleFileChange(path: path)
+        }
+
+        source.setCancelHandler { [weak self] in
+            if let fd = self?.fileDescriptor, fd >= 0 {
+                close(fd)
+                self?.fileDescriptor = -1
+            }
+        }
+
+        source.resume()
+        fileMonitor = source
+    }
+
+    func stopFileMonitoring() {
+        fileMonitor?.cancel()
+        fileMonitor = nil
+    }
+
+    func handleFileChange(path: String) {
+        let alert = NSAlert()
+        alert.messageText = "File Changed"
+        alert.informativeText = "The file \"\((path as NSString).lastPathComponent)\" has been modified by another application. Do you want to reload it?"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Reload")
+        alert.addButton(withTitle: "Keep Current")
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            // Reload the file
+            openFile(path: path)
+        }
+    }
+
+    // MARK: - Drag & Drop Support
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        // Check if we have a file URL
+        if sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: nil) {
+            return .copy
+        }
+        return []
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+              let url = urls.first else {
+            return false
+        }
+
+        // Open the dropped file
+        openFile(path: url.path)
+        return true
+    }
 }
 
 // FFI declarations
@@ -440,6 +583,15 @@ func edit_get_cursor_pos(_ state: OpaquePointer, _ row: UnsafeMutablePointer<Int
 
 @_silgen_name("edit_set_cursor_pos")
 func edit_set_cursor_pos(_ state: OpaquePointer, _ row: Int32, _ col: Int32)
+
+@_silgen_name("edit_new_file")
+func edit_new_file(_ state: OpaquePointer)
+
+@_silgen_name("edit_open_file")
+func edit_open_file(_ state: OpaquePointer, _ path: UnsafePointer<CChar>)
+
+@_silgen_name("edit_save_file_as")
+func edit_save_file_as(_ state: OpaquePointer, _ path: UnsafePointer<CChar>)
 
 struct MenuItem {
     let title: String

@@ -33,11 +33,37 @@ class EditorViewController: NSViewController {
     }
 
     @objc func newFile(_ sender: Any?) {
-        // TODO: Wire up to Edit
+        editView.newFile()
     }
 
     @objc func openFile(_ sender: Any?) {
-        // TODO: Wire up to Edit
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.message = "Choose a file to open"
+
+        panel.begin { response in
+            if response == .OK, let url = panel.url {
+                self.editView.openFile(path: url.path)
+            }
+        }
+    }
+
+    @objc func saveFile(_ sender: Any?) {
+        editView.saveFile()
+    }
+
+    @objc func saveFileAs(_ sender: Any?) {
+        let panel = NSSavePanel()
+        panel.message = "Save file as"
+        panel.nameFieldStringValue = "Untitled.txt"
+
+        panel.begin { response in
+            if response == .OK, let url = panel.url {
+                self.editView.saveFileAs(path: url.path)
+            }
+        }
     }
 
     override var acceptsFirstResponder: Bool {
