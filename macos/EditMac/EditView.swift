@@ -155,30 +155,30 @@ class EditView: NSView {
 
     // MARK: - Edit Operations
 
-    func cut() {
+    func cutSelection() {
         guard let state = editState else { return }
         edit_cut(state)
         setNeedsDisplay(bounds)
     }
 
-    func copy() {
+    func copySelection() {
         guard let state = editState else { return }
         edit_copy(state)
     }
 
-    func paste() {
+    func pasteSelection() {
         guard let state = editState else { return }
         edit_paste(state)
         setNeedsDisplay(bounds)
     }
 
-    func clear() {
+    func clearSelection() {
         guard let state = editState else { return }
         edit_delete_selection(state)
         setNeedsDisplay(bounds)
     }
 
-    func selectAll() {
+    func selectAllText() {
         guard let state = editState else { return }
         edit_select_all(state)
         setNeedsDisplay(bounds)

@@ -67,23 +67,23 @@ class EditorViewController: NSViewController {
     }
 
     @objc func cut(_ sender: Any?) {
-        editView.cut()
+        editView.cutSelection()
     }
 
     @objc func copy(_ sender: Any?) {
-        editView.copy()
+        editView.copySelection()
     }
 
     @objc func paste(_ sender: Any?) {
-        editView.paste()
+        editView.pasteSelection()
     }
 
     @objc func clear(_ sender: Any?) {
-        editView.clear()
+        editView.clearSelection()
     }
 
     @objc func selectAllText(_ sender: Any?) {
-        editView.selectAll()
+        editView.selectAllText()
     }
 
     override var acceptsFirstResponder: Bool {
