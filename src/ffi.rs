@@ -8,8 +8,9 @@ use std::ptr;
 use std::sync::Once;
 
 use crate::arena;
+use crate::clipboard::Clipboard;
 use crate::framebuffer::{Framebuffer, FramebufferCell};
-use crate::helpers::{Size, MEBI};
+use crate::helpers::{Point, Size, MEBI};
 use crate::buffer::{RcTextBuffer, TextBuffer};
 use crate::input::{InputKey, kbmod, vk};
 
@@ -107,6 +108,8 @@ pub struct EditState {
     document: Option<RcTextBuffer>,
     // Cached text content for FFI (owned)
     cached_text: Vec<u8>,
+    // Clipboard for cut/copy/paste
+    clipboard: Clipboard,
 }
 
 /// Opaque handle to render data
@@ -181,6 +184,7 @@ pub extern "C" fn edit_init(width: i32, height: i32) -> *mut EditState {
         window_size,
         document: Some(document),
         cached_text: Vec::new(),
+        clipboard: Clipboard::default(),
     });
 
     eprintln!("    ✓ Edit state initialized successfully");
@@ -509,6 +513,152 @@ pub extern "C" fn edit_set_cursor_pos(state: *mut EditState, row: i32, col: i32)
             y: row as isize,
         };
         buffer.cursor_move_to_visual(pos);
+    }
+}
+
+/// Selects all text in the document.
+#[unsafe(no_mangle)]
+pub extern "C" fn edit_select_all(state: *mut EditState) {
+    if state.is_null() {
+        return;
+    }
+
+    let state = unsafe { &mut *state };
+
+    if let Some(doc) = &state.document {
+        let mut buffer = doc.borrow_mut();
+        buffer.select_all();
+    }
+}
+
+/// Starts a selection at the current cursor position.
+/// This is called when the user begins a selection operation.
+#[unsafe(no_mangle)]
+pub extern "C" fn edit_selection_start(state: *mut EditState) {
+    if state.is_null() {
+        return;
+    }
+
+    let state = unsafe { &mut *state };
+
+    if let Some(doc) = &state.document {
+        let mut buffer = doc.borrow_mut();
+        // Start selection by updating selection to current cursor position
+        // This sets the "beg" anchor point
+        let pos = buffer.cursor_visual_pos();
+        buffer.selection_update_visual(pos);
+    }
+}
+
+/// Extends the selection to the given cursor position.
+/// This moves the cursor and updates the selection endpoint.
+#[unsafe(no_mangle)]
+pub extern "C" fn edit_selection_extend(state: *mut EditState, row: i32, col: i32) {
+    if state.is_null() {
+        return;
+    }
+
+    let state = unsafe { &mut *state };
+
+    if let Some(doc) = &state.document {
+        let mut buffer = doc.borrow_mut();
+        let pos = Point {
+            x: col as isize,
+            y: row as isize,
+        };
+        buffer.selection_update_visual(pos);
+    }
+}
+
+/// Clears the current selection.
+#[unsafe(no_mangle)]
+pub extern "C" fn edit_selection_clear(state: *mut EditState) {
+    if state.is_null() {
+        return;
+    }
+
+    let state = unsafe { &mut *state };
+
+    if let Some(doc) = &state.document {
+        let mut buffer = doc.borrow_mut();
+        buffer.clear_selection();
+    }
+}
+
+/// Checks if there is an active selection.
+#[unsafe(no_mangle)]
+pub extern "C" fn edit_has_selection(state: *mut EditState) -> bool {
+    if state.is_null() {
+        return false;
+    }
+
+    let state = unsafe { &*state };
+
+    if let Some(doc) = &state.document {
+        let buffer = doc.borrow();
+        buffer.has_selection()
+    } else {
+        false
+    }
+}
+
+/// Copies selected text to clipboard.
+#[unsafe(no_mangle)]
+pub extern "C" fn edit_copy(state: *mut EditState) {
+    if state.is_null() {
+        return;
+    }
+
+    let state = unsafe { &mut *state };
+
+    if let Some(doc) = &state.document {
+        let mut buffer = doc.borrow_mut();
+        buffer.copy(&mut state.clipboard);
+    }
+}
+
+/// Cuts selected text to clipboard.
+#[unsafe(no_mangle)]
+pub extern "C" fn edit_cut(state: *mut EditState) {
+    if state.is_null() {
+        return;
+    }
+
+    let state = unsafe { &mut *state };
+
+    if let Some(doc) = &state.document {
+        let mut buffer = doc.borrow_mut();
+        buffer.cut(&mut state.clipboard);
+    }
+}
+
+/// Pastes text from clipboard.
+#[unsafe(no_mangle)]
+pub extern "C" fn edit_paste(state: *mut EditState) {
+    if state.is_null() {
+        return;
+    }
+
+    let state = unsafe { &mut *state };
+
+    if let Some(doc) = &state.document {
+        let mut buffer = doc.borrow_mut();
+        buffer.paste(&state.clipboard);
+    }
+}
+
+/// Deletes selected text.
+#[unsafe(no_mangle)]
+pub extern "C" fn edit_delete_selection(state: *mut EditState) {
+    if state.is_null() {
+        return;
+    }
+
+    let state = unsafe { &mut *state };
+
+    if let Some(doc) = &state.document {
+        let mut buffer = doc.borrow_mut();
+        buffer.clear_selection();
     }
 }
 

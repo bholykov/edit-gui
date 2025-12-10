@@ -33,6 +33,11 @@ class EditView: NSView {
     private var fileMonitor: DispatchSourceFileSystemObject?
     private var fileDescriptor: Int32 = -1
 
+    // Selection state
+    private var isSelecting = false
+    private var selectionStartRow: Int32 = 0
+    private var selectionStartCol: Int32 = 0
+
     override var isFlipped: Bool {
         return true  // Use top-left origin for easier text drawing
     }
@@ -146,6 +151,37 @@ class EditView: NSView {
 
         // Add to recent files
         NSDocumentController.shared.noteNewRecentDocumentURL(URL(fileURLWithPath: path))
+    }
+
+    // MARK: - Edit Operations
+
+    func cut() {
+        guard let state = editState else { return }
+        edit_cut(state)
+        setNeedsDisplay(bounds)
+    }
+
+    func copy() {
+        guard let state = editState else { return }
+        edit_copy(state)
+    }
+
+    func paste() {
+        guard let state = editState else { return }
+        edit_paste(state)
+        setNeedsDisplay(bounds)
+    }
+
+    func clear() {
+        guard let state = editState else { return }
+        edit_delete_selection(state)
+        setNeedsDisplay(bounds)
+    }
+
+    func selectAll() {
+        guard let state = editState else { return }
+        edit_select_all(state)
+        setNeedsDisplay(bounds)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -322,6 +358,55 @@ class EditView: NSView {
         let keyCode = event.keyCode
         let modifiers = event.modifierFlags
 
+        // Handle clipboard shortcuts (Cmd+C/X/V/A)
+        if modifiers.contains(.command) {
+            if let characters = event.charactersIgnoringModifiers?.lowercased() {
+                switch characters {
+                case "a":
+                    // Select All
+                    edit_select_all(state)
+                    cursorVisible = true
+                    setNeedsDisplay(bounds)
+                    return
+                case "c":
+                    // Copy
+                    edit_copy(state)
+                    return
+                case "x":
+                    // Cut
+                    edit_cut(state)
+                    cursorVisible = true
+                    setNeedsDisplay(bounds)
+                    return
+                case "v":
+                    // Paste
+                    edit_paste(state)
+                    cursorVisible = true
+                    setNeedsDisplay(bounds)
+                    return
+                default:
+                    break
+                }
+            }
+        }
+
+        // Handle Shift+Arrow keys for selection
+        let isArrowKey = (keyCode >= 123 && keyCode <= 126) // Left, Right, Down, Up
+        if modifiers.contains(.shift) && isArrowKey {
+            // Start selection if not already selecting
+            if !isSelecting {
+                edit_selection_start(state)
+                isSelecting = true
+
+                // Get current cursor position as selection start
+                edit_get_cursor_pos(state, &selectionStartRow, &selectionStartCol)
+            }
+        } else if isSelecting && !modifiers.contains(.shift) {
+            // Clear selection if Shift is released
+            edit_selection_clear(state)
+            isSelecting = false
+        }
+
         // Convert NSEvent modifiers to Edit's modifier format
         var editModifiers: UInt32 = 0
         if modifiers.contains(.shift) {
@@ -340,10 +425,18 @@ class EditView: NSView {
         // Send to Edit
         edit_handle_key(state, keyCode, editModifiers)
 
+        // If we're selecting, extend selection to new cursor position
+        if isSelecting {
+            var newRow: Int32 = 0
+            var newCol: Int32 = 0
+            edit_get_cursor_pos(state, &newRow, &newCol)
+            edit_selection_extend(state, newRow, newCol)
+        }
+
         // Reset cursor visibility on keypress
         cursorVisible = true
 
-        // Mark for redraw (async is fine now that we fixed the flip() issue)
+        // Mark for redraw
         setNeedsDisplay(bounds)
     }
 
@@ -383,14 +476,57 @@ class EditView: NSView {
         let row = Int32(textY / cellSize.height)
         let col = Int32(max(0, location.x - 5) / cellSize.width)
 
+        // Clear any existing selection
+        edit_selection_clear(state)
+        isSelecting = false
+
         // Set cursor position
         edit_set_cursor_pos(state, row, col)
+
+        // Start selection for potential drag
+        edit_selection_start(state)
+        isSelecting = true
+        selectionStartRow = row
+        selectionStartCol = col
 
         // Reset cursor visibility on click
         cursorVisible = true
 
         // Mark for redraw
         setNeedsDisplay(bounds)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let state = editState else { return }
+        guard isSelecting else { return }
+
+        // Get mouse location in view coordinates
+        let location = convert(event.locationInWindow, from: nil)
+
+        // Check if drag is in the text area
+        guard location.y >= menuBarHeight && location.y < bounds.height - statusBarHeight else {
+            return
+        }
+
+        // Convert to text coordinates
+        let textY = location.y - menuBarHeight
+        let row = Int32(textY / cellSize.height)
+        let col = Int32(max(0, location.x - 5) / cellSize.width)
+
+        // Extend selection to new position
+        edit_set_cursor_pos(state, row, col)
+        edit_selection_extend(state, row, col)
+
+        // Reset cursor visibility
+        cursorVisible = true
+
+        // Mark for redraw
+        setNeedsDisplay(bounds)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        // Keep selection active even after mouse up
+        // Don't stop selecting - let user continue with keyboard
     }
 
     func handleMenuClick(at location: CGPoint) {
@@ -592,6 +728,33 @@ func edit_open_file(_ state: OpaquePointer, _ path: UnsafePointer<CChar>)
 
 @_silgen_name("edit_save_file_as")
 func edit_save_file_as(_ state: OpaquePointer, _ path: UnsafePointer<CChar>)
+
+@_silgen_name("edit_select_all")
+func edit_select_all(_ state: OpaquePointer)
+
+@_silgen_name("edit_selection_start")
+func edit_selection_start(_ state: OpaquePointer)
+
+@_silgen_name("edit_selection_extend")
+func edit_selection_extend(_ state: OpaquePointer, _ row: Int32, _ col: Int32)
+
+@_silgen_name("edit_selection_clear")
+func edit_selection_clear(_ state: OpaquePointer)
+
+@_silgen_name("edit_has_selection")
+func edit_has_selection(_ state: OpaquePointer) -> Bool
+
+@_silgen_name("edit_copy")
+func edit_copy(_ state: OpaquePointer)
+
+@_silgen_name("edit_cut")
+func edit_cut(_ state: OpaquePointer)
+
+@_silgen_name("edit_paste")
+func edit_paste(_ state: OpaquePointer)
+
+@_silgen_name("edit_delete_selection")
+func edit_delete_selection(_ state: OpaquePointer)
 
 struct MenuItem {
     let title: String

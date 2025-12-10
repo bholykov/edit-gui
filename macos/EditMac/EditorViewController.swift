@@ -66,6 +66,26 @@ class EditorViewController: NSViewController {
         }
     }
 
+    @objc func cut(_ sender: Any?) {
+        editView.cut()
+    }
+
+    @objc func copy(_ sender: Any?) {
+        editView.copy()
+    }
+
+    @objc func paste(_ sender: Any?) {
+        editView.paste()
+    }
+
+    @objc func clear(_ sender: Any?) {
+        editView.clear()
+    }
+
+    @objc func selectAll(_ sender: Any?) {
+        editView.selectAll()
+    }
+
     override var acceptsFirstResponder: Bool {
         return true
     }
