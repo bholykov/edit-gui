@@ -236,12 +236,10 @@ pub extern "C" fn edit_handle_key(state: *mut EditState, key: u16, modifiers: u3
     if let Some(doc) = &state.document {
         let mut buffer = doc.borrow_mut();
 
-        // Handle basic text input - for now just process printable characters
-        // TODO: This is a simplified implementation. Edit's full TUI uses a more
-        // sophisticated input processing system.
-
-        // For now, just write letters/numbers
+        // Handle basic text input
         let key_value = input_key.key().value();
+
+        // Letters
         if key_value >= 'A' as u32 && key_value <= 'Z' as u32 {
             let ch = key_value as u8 as char;
             let text = if input_key.modifiers().contains(kbmod::SHIFT) {
@@ -250,48 +248,40 @@ pub extern "C" fn edit_handle_key(state: *mut EditState, key: u16, modifiers: u3
                 ch.to_lowercase().to_string()
             };
             buffer.write_canon(text.as_bytes());
-        } else if key_value >= '0' as u32 && key_value <= '9' as u32 {
+        }
+        // Numbers
+        else if key_value >= '0' as u32 && key_value <= '9' as u32 {
             let ch = key_value as u8 as char;
             buffer.write_canon(ch.to_string().as_bytes());
-        } else if key_value == ' ' as u32 {
+        }
+        // Space
+        else if key_value == ' ' as u32 {
             buffer.write_canon(b" ");
-        } else if key_value == '\r' as u32 {
+        }
+        // Enter/Return
+        else if key_value == '\r' as u32 {
             buffer.write_canon(b"\n");
-        } else if key_value == 0x08 {  // Backspace
-            buffer.delete(crate::buffer::CursorMovement::Grapheme, 1);
+        }
+        // Backspace (0x08 or 127)
+        else if key_value == 0x08 || key_value == 127 {
+            buffer.backspace();
+        }
+        // Arrow keys - move cursor
+        else if key_value == 0xF700 { // Up
+            buffer.move_cursor(crate::buffer::CursorMovement::Line, -1);
+        }
+        else if key_value == 0xF701 { // Down
+            buffer.move_cursor(crate::buffer::CursorMovement::Line, 1);
+        }
+        else if key_value == 0xF702 { // Left
+            buffer.move_cursor(crate::buffer::CursorMovement::Grapheme, -1);
+        }
+        else if key_value == 0xF703 { // Right
+            buffer.move_cursor(crate::buffer::CursorMovement::Grapheme, 1);
         }
     }
 
-    // DON'T call flip() here - it clears everything! Only call on resize.
-    // Clear the background by filling with black
-    state.framebuffer.blend_bg(
-        crate::helpers::Rect {
-            left: 0,
-            top: 0,
-            right: state.window_size.width,
-            bottom: state.window_size.height,
-        },
-        crate::oklab::StraightRgba::from_le(0xFF000000),
-    );
-
-    // Show key press feedback
-    let key_info = format!("Last key: code={} mods=0x{:x} -> vk=0x{:x}", key, modifiers, input_key.value());
-    state.framebuffer.replace_text(0, 0, state.window_size.width, &key_info);
-
-    // Render document content
-    if let Some(doc) = &state.document {
-        let buffer = doc.borrow();
-        let text_bytes = buffer.read_forward(0);
-
-        // Convert bytes to string and split by lines
-        if let Ok(text) = std::str::from_utf8(text_bytes) {
-            let mut row = 2;
-            for line in text.lines().take(30) {
-                state.framebuffer.replace_text(row, 0, state.window_size.width, line);
-                row += 1;
-            }
-        }
-    }
+    // Note: No framebuffer rendering here - Swift handles all drawing
 }
 
 /// Handles mouse input.

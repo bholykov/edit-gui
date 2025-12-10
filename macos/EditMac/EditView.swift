@@ -10,23 +10,11 @@ class EditView: NSView {
     private let dosText = NSColor(red: 0.75, green: 0.75, blue: 0.75, alpha: 1)  // Light gray
     private let dosMenuBg = NSColor(red: 0.5, green: 0.5, blue: 0.5, alpha: 1)  // Gray
     private let dosMenuText = NSColor.black
-    private let menuBarHeight: CGFloat = 20
     private let statusBarHeight: CGFloat = 20
 
     // Cursor state
     private var cursorVisible = true
     private var cursorBlinkTimer: Timer?
-
-    // Menu state
-    private var activeMenu: Int? = nil  // Index of open menu (nil = none)
-    private var menuRects: [NSRect] = []  // Clickable rects for each menu
-    private let menuItems = [
-        MenuItem(title: "File", items: ["New", "Open...", "Save", "Save As...", "---", "Exit"]),
-        MenuItem(title: "Edit", items: ["Cut", "Copy", "Paste", "Clear"]),
-        MenuItem(title: "Search", items: ["Find...", "Repeat Last Find", "Replace..."]),
-        MenuItem(title: "Options", items: ["Display...", "Help Path..."]),
-        MenuItem(title: "Help", items: ["Getting Started", "About..."])
-    ]
 
     // File management
     private var currentFilePath: String?
@@ -187,52 +175,11 @@ class EditView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 
-        guard let context = NSGraphicsContext.current?.cgContext else { return }
         guard let state = editState else { return }
 
         // Fill with DOS blue background
         dosBlue.setFill()
         bounds.fill()
-
-        // Draw menu bar at top
-        dosMenuBg.setFill()
-        NSRect(x: 0, y: 0, width: bounds.width, height: menuBarHeight).fill()
-
-        let menuAttrs: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: dosMenuText
-        ]
-
-        // Draw menu titles and save their rects
-        menuRects.removeAll()
-        var menuX: CGFloat = 5
-        for (index, menu) in menuItems.enumerated() {
-            let width = CGFloat(menu.title.count * 9) + 10
-            let rect = NSRect(x: menuX, y: 0, width: width, height: menuBarHeight)
-            menuRects.append(rect)
-
-            // Highlight if active
-            if activeMenu == index {
-                NSColor.black.setFill()
-                rect.fill()
-                let highlightAttrs: [NSAttributedString.Key: Any] = [
-                    .font: font,
-                    .foregroundColor: NSColor.white
-                ]
-                let menuStr = NSAttributedString(string: menu.title, attributes: highlightAttrs)
-                menuStr.draw(at: CGPoint(x: menuX + 5, y: 2))
-            } else {
-                let menuStr = NSAttributedString(string: menu.title, attributes: menuAttrs)
-                menuStr.draw(at: CGPoint(x: menuX + 5, y: 2))
-            }
-
-            menuX += width + 5
-        }
-
-        // Draw dropdown menu if one is active
-        if let activeIndex = activeMenu, activeIndex < menuItems.count {
-            drawDropdownMenu(at: activeIndex)
-        }
 
         // Get cursor position
         var cursorRow: Int32 = 0
@@ -243,23 +190,24 @@ class EditView: NSView {
         dosMenuBg.setFill()
         NSRect(x: 0, y: bounds.height - statusBarHeight, width: bounds.width, height: statusBarHeight).fill()
 
+        let statusAttrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: dosMenuText
+        ]
         let statusText = String(format: " Line %d   Col %d   F1=Help", cursorRow + 1, cursorCol + 1)
-        let statusStr = NSAttributedString(string: statusText, attributes: menuAttrs)
+        let statusStr = NSAttributedString(string: statusText, attributes: statusAttrs)
         statusStr.draw(at: CGPoint(x: 5, y: bounds.height - statusBarHeight + 2))
 
-        // Fast path: Get text content directly instead of iterating cells
-        // Update the cache first to ensure we have fresh data
+        // Get text content from Edit
         edit_update_text_cache(state)
-
         let textLen = edit_get_text_length(state)
         guard textLen > 0 else { return }
-
         guard let textPtr = edit_get_text_content(state) else { return }
 
         let textData = Data(bytes: textPtr, count: Int(textLen))
         guard let text = String(data: textData, encoding: .utf8) else { return }
 
-        // Draw text line by line (in the content area between menu and status bars)
+        // Draw text line by line (full view, just avoiding status bar)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: dosText
@@ -267,7 +215,7 @@ class EditView: NSView {
 
         var row = 0
         for line in text.components(separatedBy: "\n") {
-            let y = menuBarHeight + CGFloat(row) * cellSize.height
+            let y = CGFloat(row) * cellSize.height
             if y + cellSize.height > bounds.height - statusBarHeight {
                 break  // Don't draw beyond status bar
             }
@@ -279,7 +227,7 @@ class EditView: NSView {
         // Draw cursor (blinking block)
         if cursorVisible {
             let cursorX = 5 + CGFloat(cursorCol) * cellSize.width
-            let cursorY = menuBarHeight + CGFloat(cursorRow) * cellSize.height
+            let cursorY = CGFloat(cursorRow) * cellSize.height
 
             dosText.setFill()
             let cursorRect = NSRect(x: cursorX, y: cursorY, width: cellSize.width, height: cellSize.height)
@@ -303,53 +251,6 @@ class EditView: NSView {
         }
     }
 
-    func drawDropdownMenu(at menuIndex: Int) {
-        let menu = menuItems[menuIndex]
-        let menuRect = menuRects[menuIndex]
-
-        // Calculate dropdown dimensions
-        let maxWidth = menu.items.map { $0.count * 9 + 20 }.max() ?? 100
-        let dropdownHeight = CGFloat(menu.items.count) * cellSize.height + 4
-        let dropdownRect = NSRect(
-            x: menuRect.minX,
-            y: menuBarHeight,
-            width: CGFloat(maxWidth),
-            height: dropdownHeight
-        )
-
-        // Draw dropdown background (light gray)
-        NSColor(white: 0.85, alpha: 1).setFill()
-        dropdownRect.fill()
-
-        // Draw dropdown border (black)
-        NSColor.black.setStroke()
-        let borderPath = NSBezierPath(rect: dropdownRect)
-        borderPath.lineWidth = 2
-        borderPath.stroke()
-
-        // Draw menu items
-        let itemAttrs: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: NSColor.black
-        ]
-
-        var itemY = menuBarHeight + 2
-        for item in menu.items {
-            if item == "---" {
-                // Draw separator
-                NSColor.darkGray.setStroke()
-                let separatorPath = NSBezierPath()
-                separatorPath.move(to: CGPoint(x: dropdownRect.minX + 2, y: itemY + cellSize.height / 2))
-                separatorPath.line(to: CGPoint(x: dropdownRect.maxX - 2, y: itemY + cellSize.height / 2))
-                separatorPath.lineWidth = 1
-                separatorPath.stroke()
-            } else {
-                let itemStr = NSAttributedString(string: " " + item, attributes: itemAttrs)
-                itemStr.draw(at: CGPoint(x: dropdownRect.minX, y: itemY))
-            }
-            itemY += cellSize.height
-        }
-    }
 
     override func keyDown(with event: NSEvent) {
         guard let state = editState else { return }
@@ -358,36 +259,11 @@ class EditView: NSView {
         let keyCode = event.keyCode
         let modifiers = event.modifierFlags
 
-        // Handle clipboard shortcuts (Cmd+C/X/V/A)
+        // Let Cmd+shortcuts be handled by menu items
         if modifiers.contains(.command) {
-            if let characters = event.charactersIgnoringModifiers?.lowercased() {
-                switch characters {
-                case "a":
-                    // Select All
-                    edit_select_all(state)
-                    cursorVisible = true
-                    setNeedsDisplay(bounds)
-                    return
-                case "c":
-                    // Copy
-                    edit_copy(state)
-                    return
-                case "x":
-                    // Cut
-                    edit_cut(state)
-                    cursorVisible = true
-                    setNeedsDisplay(bounds)
-                    return
-                case "v":
-                    // Paste
-                    edit_paste(state)
-                    cursorVisible = true
-                    setNeedsDisplay(bounds)
-                    return
-                default:
-                    break
-                }
-            }
+            // Pass through to responder chain (menu items will handle)
+            super.keyDown(with: event)
+            return
         }
 
         // Handle Shift+Arrow keys for selection
@@ -418,9 +294,6 @@ class EditView: NSView {
         if modifiers.contains(.option) {
             editModifiers |= 0x04
         }
-        if modifiers.contains(.command) {
-            editModifiers |= 0x08
-        }
 
         // Send to Edit
         edit_handle_key(state, keyCode, editModifiers)
@@ -446,34 +319,13 @@ class EditView: NSView {
         // Get mouse location in view coordinates
         let location = convert(event.locationInWindow, from: nil)
 
-        // Check if click is in menu bar
-        if location.y < menuBarHeight {
-            handleMenuClick(at: location)
-            return
-        }
-
-        // Check if click is in dropdown menu
-        if let menuIndex = activeMenu {
-            if handleDropdownClick(at: location, menuIndex: menuIndex) {
-                return
-            }
-        }
-
-        // Click outside menu - close any open menu
-        if activeMenu != nil {
-            activeMenu = nil
-            setNeedsDisplay(bounds)
-            return
-        }
-
-        // Check if click is in the text area (between menu and status bars)
-        guard location.y >= menuBarHeight && location.y < bounds.height - statusBarHeight else {
+        // Check if click is in the text area (above status bar)
+        guard location.y < bounds.height - statusBarHeight else {
             return
         }
 
         // Convert to text coordinates
-        let textY = location.y - menuBarHeight
-        let row = Int32(textY / cellSize.height)
+        let row = Int32(location.y / cellSize.height)
         let col = Int32(max(0, location.x - 5) / cellSize.width)
 
         // Clear any existing selection
@@ -504,13 +356,12 @@ class EditView: NSView {
         let location = convert(event.locationInWindow, from: nil)
 
         // Check if drag is in the text area
-        guard location.y >= menuBarHeight && location.y < bounds.height - statusBarHeight else {
+        guard location.y < bounds.height - statusBarHeight else {
             return
         }
 
         // Convert to text coordinates
-        let textY = location.y - menuBarHeight
-        let row = Int32(textY / cellSize.height)
+        let row = Int32(location.y / cellSize.height)
         let col = Int32(max(0, location.x - 5) / cellSize.width)
 
         // Extend selection to new position
@@ -529,82 +380,6 @@ class EditView: NSView {
         // Don't stop selecting - let user continue with keyboard
     }
 
-    func handleMenuClick(at location: CGPoint) {
-        // Find which menu was clicked
-        for (index, rect) in menuRects.enumerated() {
-            if rect.contains(location) {
-                if activeMenu == index {
-                    // Clicked on already-open menu - close it
-                    activeMenu = nil
-                } else {
-                    // Open this menu
-                    activeMenu = index
-                }
-                setNeedsDisplay(bounds)
-                return
-            }
-        }
-    }
-
-    func handleDropdownClick(at location: CGPoint, menuIndex: Int) -> Bool {
-        let menu = menuItems[menuIndex]
-        let menuRect = menuRects[menuIndex]
-
-        // Calculate dropdown rect
-        let maxWidth = menu.items.map { $0.count * 9 + 20 }.max() ?? 100
-        let dropdownHeight = CGFloat(menu.items.count) * cellSize.height + 4
-        let dropdownRect = NSRect(
-            x: menuRect.minX,
-            y: menuBarHeight,
-            width: CGFloat(maxWidth),
-            height: dropdownHeight
-        )
-
-        // Check if click is inside dropdown
-        if dropdownRect.contains(location) {
-            // Calculate which item was clicked
-            let relativeY = location.y - menuBarHeight - 2
-            let itemIndex = Int(relativeY / cellSize.height)
-
-            if itemIndex >= 0 && itemIndex < menu.items.count {
-                let item = menu.items[itemIndex]
-                executeMenuAction(menu: menu.title, item: item)
-                activeMenu = nil
-                setNeedsDisplay(bounds)
-            }
-            return true
-        }
-
-        return false
-    }
-
-    func executeMenuAction(menu: String, item: String) {
-        print("Menu action: \(menu) -> \(item)")
-
-        switch (menu, item) {
-        case ("File", "Exit"):
-            NSApplication.shared.terminate(nil)
-
-        case ("File", "New"):
-            // Clear the document (implement later)
-            print("New document")
-
-        case ("Help", "About..."):
-            showAboutDialog()
-
-        default:
-            print("Menu action not implemented: \(menu) -> \(item)")
-        }
-    }
-
-    func showAboutDialog() {
-        let alert = NSAlert()
-        alert.messageText = "Edit for macOS"
-        alert.informativeText = "A native macOS implementation of MS-DOS Edit\n\nBuilt with Swift and Rust"
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
-    }
 
     // MARK: - File Monitoring
 
@@ -755,11 +530,6 @@ func edit_paste(_ state: OpaquePointer)
 
 @_silgen_name("edit_delete_selection")
 func edit_delete_selection(_ state: OpaquePointer)
-
-struct MenuItem {
-    let title: String
-    let items: [String]
-}
 
 struct FramebufferCell {
     let ch: UInt32          // Rust char (4 bytes, UTF-32)
