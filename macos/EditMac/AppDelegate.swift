@@ -95,7 +95,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(NSMenuItem(title: "Paste", action: #selector(editorViewController.paste(_:)), keyEquivalent: "v"))
         editMenu.addItem(NSMenuItem(title: "Clear", action: #selector(editorViewController.clear(_:)), keyEquivalent: ""))
         editMenu.addItem(NSMenuItem.separator())
-        editMenu.addItem(NSMenuItem(title: "Select All", action: #selector(editorViewController.selectAll(_:)), keyEquivalent: "a"))
+        editMenu.addItem(NSMenuItem(title: "Select All", action: #selector(editorViewController.selectAllText(_:)), keyEquivalent: "a"))
 
         NSApplication.shared.mainMenu = mainMenu
     }

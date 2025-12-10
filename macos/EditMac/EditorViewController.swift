@@ -82,7 +82,7 @@ class EditorViewController: NSViewController {
         editView.clear()
     }
 
-    @objc func selectAll(_ sender: Any?) {
+    @objc func selectAllText(_ sender: Any?) {
         editView.selectAll()
     }
 
