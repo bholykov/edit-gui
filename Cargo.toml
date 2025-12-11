@@ -13,12 +13,18 @@ build = "build/main.rs"
 [lib]
 crate-type = ["rlib", "staticlib"]
 
+[[bin]]
+name = "egui-edit"
+path = "src/bin/egui-edit/main.rs"
+required-features = ["gui"]
+
 [[bench]]
 name = "lib"
 harness = false
 
 [features]
 debug-latency = []
+gui = ["eframe", "egui", "rfd"]
 
 # We use `opt-level = "s"` as it significantly reduces binary size.
 # We could then use the `#[optimize(speed)]` attribute for spot optimizations.
@@ -42,6 +48,11 @@ lto = "thin"                # Similarly, speed up linking by a ton
 wgpu = "22.0"
 bytemuck = { version = "1.14", features = ["derive"] }
 fontdue = "0.9"
+
+# egui UI framework (for egui-edit binary)
+eframe = { version = "0.29", optional = true }
+egui = { version = "0.29", optional = true }
+rfd = { version = "0.15", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
