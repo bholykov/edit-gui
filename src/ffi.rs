@@ -590,6 +590,35 @@ pub extern "C" fn edit_has_selection(state: *mut EditState) -> bool {
     }
 }
 
+/// Gets the selection range in byte offsets.
+/// Returns true if there's a selection, false otherwise.
+/// If true, start_offset and end_offset are set to the selection bounds.
+#[unsafe(no_mangle)]
+pub extern "C" fn edit_get_selection_offsets(
+    state: *mut EditState,
+    start_offset: *mut usize,
+    end_offset: *mut usize,
+) -> bool {
+    if state.is_null() || start_offset.is_null() || end_offset.is_null() {
+        return false;
+    }
+
+    let state = unsafe { &*state };
+
+    if let Some(doc) = &state.document {
+        let buffer = doc.borrow();
+        if let Some((start_cursor, end_cursor)) = buffer.selection_range() {
+            unsafe {
+                *start_offset = start_cursor.offset;
+                *end_offset = end_cursor.offset;
+            }
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Copies selected text to clipboard.
 #[unsafe(no_mangle)]
 pub extern "C" fn edit_copy(state: *mut EditState) {

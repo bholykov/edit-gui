@@ -207,20 +207,55 @@ class EditView: NSView {
         let textData = Data(bytes: textPtr, count: Int(textLen))
         guard let text = String(data: textData, encoding: .utf8) else { return }
 
+        // Get selection range if any
+        var selectionStartOffset: Int = 0
+        var selectionEndOffset: Int = 0
+        let hasSelection = edit_get_selection_offsets(state, &selectionStartOffset, &selectionEndOffset)
+
         // Draw text line by line (full view, just avoiding status bar)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: dosText
         ]
 
+        // Selection highlight color (light blue)
+        let selectionBg = NSColor(red: 0, green: 0.4, blue: 0.8, alpha: 0.5)
+
         var row = 0
+        var byteOffset = 0
         for line in text.components(separatedBy: "\n") {
             let y = CGFloat(row) * cellSize.height
             if y + cellSize.height > bounds.height - statusBarHeight {
                 break  // Don't draw beyond status bar
             }
+
+            // Calculate byte offsets for this line
+            let lineBytes = line.utf8.count
+            let lineStartOffset = byteOffset
+            let lineEndOffset = byteOffset + lineBytes
+
+            // Draw selection highlight if this line overlaps with selection
+            if hasSelection && selectionStartOffset < lineEndOffset && selectionEndOffset > lineStartOffset {
+                // Calculate which columns in this line are selected
+                let selStart = max(0, selectionStartOffset - lineStartOffset)
+                let selEnd = min(lineBytes, selectionEndOffset - lineStartOffset)
+
+                // Convert byte offsets to character positions (approximate for monospace)
+                let startCol = line.utf8.prefix(selStart).count
+                let endCol = line.utf8.prefix(selEnd).count
+
+                let highlightX = 5 + CGFloat(startCol) * cellSize.width
+                let highlightWidth = CGFloat(endCol - startCol) * cellSize.width
+
+                selectionBg.setFill()
+                NSRect(x: highlightX, y: y, width: highlightWidth, height: cellSize.height).fill()
+            }
+
+            // Draw the text
             let attrString = NSAttributedString(string: line, attributes: attributes)
             attrString.draw(at: CGPoint(x: 5, y: y))
+
+            byteOffset = lineEndOffset + 1  // +1 for the newline character
             row += 1
         }
 
@@ -518,6 +553,9 @@ func edit_selection_clear(_ state: OpaquePointer)
 
 @_silgen_name("edit_has_selection")
 func edit_has_selection(_ state: OpaquePointer) -> Bool
+
+@_silgen_name("edit_get_selection_offsets")
+func edit_get_selection_offsets(_ state: OpaquePointer, _ startOffset: UnsafeMutablePointer<Int>, _ endOffset: UnsafeMutablePointer<Int>) -> Bool
 
 @_silgen_name("edit_copy")
 func edit_copy(_ state: OpaquePointer)
