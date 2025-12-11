@@ -212,6 +212,10 @@ class EditView: NSView {
         var selectionEndOffset: Int = 0
         let hasSelection = edit_get_selection_offsets(state, &selectionStartOffset, &selectionEndOffset)
 
+        if hasSelection {
+            print("🔵 Selection: \(selectionStartOffset) to \(selectionEndOffset)")
+        }
+
         // Draw text line by line (full view, just avoiding status bar)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
@@ -236,19 +240,48 @@ class EditView: NSView {
 
             // Draw selection highlight if this line overlaps with selection
             if hasSelection && selectionStartOffset < lineEndOffset && selectionEndOffset > lineStartOffset {
-                // Calculate which columns in this line are selected
+                // Calculate which bytes in this line are selected
                 let selStart = max(0, selectionStartOffset - lineStartOffset)
                 let selEnd = min(lineBytes, selectionEndOffset - lineStartOffset)
 
-                // Convert byte offsets to character positions (approximate for monospace)
-                let startCol = line.utf8.prefix(selStart).count
-                let endCol = line.utf8.prefix(selEnd).count
+                // Convert byte offsets to character/column positions
+                // We need to decode UTF-8 properly
+                let lineData = Data(line.utf8)
+
+                var startCol = 0
+                var endCol = 0
+                var byteIndex = 0
+                var charIndex = 0
+
+                for byte in lineData {
+                    if byteIndex == selStart {
+                        startCol = charIndex
+                    }
+                    if byteIndex == selEnd {
+                        endCol = charIndex
+                        break
+                    }
+
+                    // UTF-8 continuation bytes start with 10xxxxxx (0x80-0xBF)
+                    // Only count non-continuation bytes as characters
+                    if (byte & 0xC0) != 0x80 {
+                        charIndex += 1
+                    }
+                    byteIndex += 1
+                }
+
+                // If we didn't hit selEnd in the loop, it extends to the end
+                if byteIndex <= selEnd {
+                    endCol = charIndex
+                }
 
                 let highlightX = 5 + CGFloat(startCol) * cellSize.width
                 let highlightWidth = CGFloat(endCol - startCol) * cellSize.width
 
-                selectionBg.setFill()
-                NSRect(x: highlightX, y: y, width: highlightWidth, height: cellSize.height).fill()
+                if highlightWidth > 0 {
+                    selectionBg.setFill()
+                    NSRect(x: highlightX, y: y, width: highlightWidth, height: cellSize.height).fill()
+                }
             }
 
             // Draw the text
