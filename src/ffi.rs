@@ -262,22 +262,20 @@ pub extern "C" fn edit_handle_key(state: *mut EditState, key: u16, modifiers: u3
         else if key_value == '\r' as u32 {
             buffer.write_canon(b"\n");
         }
-        // Backspace (0x08 or 127)
+        // Backspace (0x08 or 127) - delete character before cursor
         else if key_value == 0x08 || key_value == 127 {
-            buffer.backspace();
+            buffer.delete(crate::buffer::CursorMovement::Grapheme, -1);
         }
-        // Arrow keys - move cursor
-        else if key_value == 0xF700 { // Up
-            buffer.move_cursor(crate::buffer::CursorMovement::Line, -1);
+        // Delete key - delete character after cursor
+        else if key_value == 0x7F {
+            buffer.delete(crate::buffer::CursorMovement::Grapheme, 1);
         }
-        else if key_value == 0xF701 { // Down
-            buffer.move_cursor(crate::buffer::CursorMovement::Line, 1);
-        }
+        // Arrow keys - move cursor (for now just left/right work properly)
         else if key_value == 0xF702 { // Left
-            buffer.move_cursor(crate::buffer::CursorMovement::Grapheme, -1);
+            buffer.cursor_move_delta(crate::buffer::CursorMovement::Grapheme, -1);
         }
         else if key_value == 0xF703 { // Right
-            buffer.move_cursor(crate::buffer::CursorMovement::Grapheme, 1);
+            buffer.cursor_move_delta(crate::buffer::CursorMovement::Grapheme, 1);
         }
     }
 
