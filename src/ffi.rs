@@ -8,8 +8,9 @@ use std::ptr;
 use std::sync::Once;
 
 use crate::arena;
+use crate::clipboard::Clipboard;
 use crate::framebuffer::{Framebuffer, FramebufferCell};
-use crate::helpers::{Size, MEBI};
+use crate::helpers::{Point, Size, MEBI};
 use crate::buffer::{RcTextBuffer, TextBuffer};
 use crate::input::{InputKey, kbmod, vk};
 
@@ -107,6 +108,8 @@ pub struct EditState {
     document: Option<RcTextBuffer>,
     // Cached text content for FFI (owned)
     cached_text: Vec<u8>,
+    // Clipboard for cut/copy/paste
+    clipboard: Clipboard,
 }
 
 /// Opaque handle to render data
@@ -181,6 +184,7 @@ pub extern "C" fn edit_init(width: i32, height: i32) -> *mut EditState {
         window_size,
         document: Some(document),
         cached_text: Vec::new(),
+        clipboard: Clipboard::default(),
     });
 
     eprintln!("    ✓ Edit state initialized successfully");
@@ -232,12 +236,10 @@ pub extern "C" fn edit_handle_key(state: *mut EditState, key: u16, modifiers: u3
     if let Some(doc) = &state.document {
         let mut buffer = doc.borrow_mut();
 
-        // Handle basic text input - for now just process printable characters
-        // TODO: This is a simplified implementation. Edit's full TUI uses a more
-        // sophisticated input processing system.
-
-        // For now, just write letters/numbers
+        // Handle basic text input
         let key_value = input_key.key().value();
+
+        // Letters
         if key_value >= 'A' as u32 && key_value <= 'Z' as u32 {
             let ch = key_value as u8 as char;
             let text = if input_key.modifiers().contains(kbmod::SHIFT) {
@@ -246,48 +248,38 @@ pub extern "C" fn edit_handle_key(state: *mut EditState, key: u16, modifiers: u3
                 ch.to_lowercase().to_string()
             };
             buffer.write_canon(text.as_bytes());
-        } else if key_value >= '0' as u32 && key_value <= '9' as u32 {
+        }
+        // Numbers
+        else if key_value >= '0' as u32 && key_value <= '9' as u32 {
             let ch = key_value as u8 as char;
             buffer.write_canon(ch.to_string().as_bytes());
-        } else if key_value == ' ' as u32 {
+        }
+        // Space
+        else if key_value == ' ' as u32 {
             buffer.write_canon(b" ");
-        } else if key_value == '\r' as u32 {
+        }
+        // Enter/Return
+        else if key_value == '\r' as u32 {
             buffer.write_canon(b"\n");
-        } else if key_value == 0x08 {  // Backspace
+        }
+        // Backspace (0x08 or 127) - delete character before cursor
+        else if key_value == 0x08 || key_value == 127 {
+            buffer.delete(crate::buffer::CursorMovement::Grapheme, -1);
+        }
+        // Delete key - delete character after cursor
+        else if key_value == 0x7F {
             buffer.delete(crate::buffer::CursorMovement::Grapheme, 1);
         }
-    }
-
-    // DON'T call flip() here - it clears everything! Only call on resize.
-    // Clear the background by filling with black
-    state.framebuffer.blend_bg(
-        crate::helpers::Rect {
-            left: 0,
-            top: 0,
-            right: state.window_size.width,
-            bottom: state.window_size.height,
-        },
-        crate::oklab::StraightRgba::from_le(0xFF000000),
-    );
-
-    // Show key press feedback
-    let key_info = format!("Last key: code={} mods=0x{:x} -> vk=0x{:x}", key, modifiers, input_key.value());
-    state.framebuffer.replace_text(0, 0, state.window_size.width, &key_info);
-
-    // Render document content
-    if let Some(doc) = &state.document {
-        let buffer = doc.borrow();
-        let text_bytes = buffer.read_forward(0);
-
-        // Convert bytes to string and split by lines
-        if let Ok(text) = std::str::from_utf8(text_bytes) {
-            let mut row = 2;
-            for line in text.lines().take(30) {
-                state.framebuffer.replace_text(row, 0, state.window_size.width, line);
-                row += 1;
-            }
+        // Arrow keys - move cursor (for now just left/right work properly)
+        else if key_value == 0xF702 { // Left
+            buffer.cursor_move_delta(crate::buffer::CursorMovement::Grapheme, -1);
+        }
+        else if key_value == 0xF703 { // Right
+            buffer.cursor_move_delta(crate::buffer::CursorMovement::Grapheme, 1);
         }
     }
+
+    // Note: No framebuffer rendering here - Swift handles all drawing
 }
 
 /// Handles mouse input.
@@ -312,8 +304,16 @@ pub extern "C" fn edit_new_file(state: *mut EditState) {
 
     let state = unsafe { &mut *state };
 
-    // TODO: Implement new file logic
-    state.framebuffer.flip(state.window_size);
+    // Create a new empty document
+    match TextBuffer::new_rc(true) {
+        Ok(buf) => {
+            state.document = Some(buf);
+            eprintln!("✓ New file created");
+        }
+        Err(e) => {
+            eprintln!("✗ Failed to create new file: {:?}", e);
+        }
+    }
 }
 
 /// Opens a file at the given path.
@@ -326,23 +326,38 @@ pub extern "C" fn edit_open_file(state: *mut EditState, path: *const c_char) {
     let state = unsafe { &mut *state };
     let path_str = unsafe { CStr::from_ptr(path) }.to_string_lossy();
 
-    // TODO: Implement file opening logic
-    println!("Opening file: {}", path_str);
+    eprintln!("Opening file: {}", path_str);
 
-    state.framebuffer.flip(state.window_size);
-}
+    // Create a new buffer and load the file
+    match TextBuffer::new_rc(true) {
+        Ok(buf) => {
+            let mut tb = buf.borrow_mut();
 
-/// Saves the current file.
-#[unsafe(no_mangle)]
-pub extern "C" fn edit_save_file(state: *mut EditState) {
-    if state.is_null() {
-        return;
+            // Try to open and read the file
+            match std::fs::File::open(path_str.as_ref()) {
+                Ok(mut file) => {
+                    match tb.read_file(&mut file, None) {
+                        Ok(_) => {
+                            drop(tb);
+                            state.document = Some(buf);
+                            eprintln!("✓ File loaded successfully");
+                        }
+                        Err(e) => {
+                            eprintln!("✗ Failed to read file: {:?}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("✗ Failed to open file: {:?}", e);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("✗ Failed to create TextBuffer: {:?}", e);
+        }
     }
-
-    let _state = unsafe { &mut *state };
-
-    // TODO: Implement file saving logic
 }
+
 
 /// Saves the current file to a new path.
 #[unsafe(no_mangle)]
@@ -351,11 +366,32 @@ pub extern "C" fn edit_save_file_as(state: *mut EditState, path: *const c_char) 
         return;
     }
 
-    let _state = unsafe { &mut *state };
+    let state = unsafe { &mut *state };
     let path_str = unsafe { CStr::from_ptr(path) }.to_string_lossy();
 
-    // TODO: Implement save-as logic
-    println!("Saving file to: {}", path_str);
+    eprintln!("Saving file to: {}", path_str);
+
+    if let Some(doc) = &state.document {
+        let mut tb = doc.borrow_mut();
+
+        match std::fs::File::create(path_str.as_ref()) {
+            Ok(mut file) => {
+                match tb.write_file(&mut file) {
+                    Ok(_) => {
+                        eprintln!("✓ File saved successfully");
+                    }
+                    Err(e) => {
+                        eprintln!("✗ Failed to write file: {:?}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("✗ Failed to create file: {:?}", e);
+            }
+        }
+    } else {
+        eprintln!("✗ No document to save");
+    }
 }
 
 /// Handles window resize.
@@ -465,6 +501,181 @@ pub extern "C" fn edit_set_cursor_pos(state: *mut EditState, row: i32, col: i32)
             y: row as isize,
         };
         buffer.cursor_move_to_visual(pos);
+    }
+}
+
+/// Selects all text in the document.
+#[unsafe(no_mangle)]
+pub extern "C" fn edit_select_all(state: *mut EditState) {
+    if state.is_null() {
+        return;
+    }
+
+    let state = unsafe { &mut *state };
+
+    if let Some(doc) = &state.document {
+        let mut buffer = doc.borrow_mut();
+        buffer.select_all();
+    }
+}
+
+/// Starts a selection at the current cursor position.
+/// This is called when the user begins a selection operation.
+#[unsafe(no_mangle)]
+pub extern "C" fn edit_selection_start(state: *mut EditState) {
+    if state.is_null() {
+        return;
+    }
+
+    let state = unsafe { &mut *state };
+
+    if let Some(doc) = &state.document {
+        let mut buffer = doc.borrow_mut();
+        // Start selection by updating selection to current cursor position
+        // This sets the "beg" anchor point
+        let pos = buffer.cursor_visual_pos();
+        buffer.selection_update_visual(pos);
+    }
+}
+
+/// Extends the selection to the given cursor position.
+/// This moves the cursor and updates the selection endpoint.
+#[unsafe(no_mangle)]
+pub extern "C" fn edit_selection_extend(state: *mut EditState, row: i32, col: i32) {
+    if state.is_null() {
+        return;
+    }
+
+    let state = unsafe { &mut *state };
+
+    if let Some(doc) = &state.document {
+        let mut buffer = doc.borrow_mut();
+        let pos = Point {
+            x: col as isize,
+            y: row as isize,
+        };
+        buffer.selection_update_visual(pos);
+    }
+}
+
+/// Clears the current selection.
+#[unsafe(no_mangle)]
+pub extern "C" fn edit_selection_clear(state: *mut EditState) {
+    if state.is_null() {
+        return;
+    }
+
+    let state = unsafe { &mut *state };
+
+    if let Some(doc) = &state.document {
+        let mut buffer = doc.borrow_mut();
+        buffer.clear_selection();
+    }
+}
+
+/// Checks if there is an active selection.
+#[unsafe(no_mangle)]
+pub extern "C" fn edit_has_selection(state: *mut EditState) -> bool {
+    if state.is_null() {
+        return false;
+    }
+
+    let state = unsafe { &*state };
+
+    if let Some(doc) = &state.document {
+        let buffer = doc.borrow();
+        buffer.has_selection()
+    } else {
+        false
+    }
+}
+
+/// Gets the selection range in byte offsets.
+/// Returns true if there's a selection, false otherwise.
+/// If true, start_offset and end_offset are set to the selection bounds.
+#[unsafe(no_mangle)]
+pub extern "C" fn edit_get_selection_offsets(
+    state: *mut EditState,
+    start_offset: *mut usize,
+    end_offset: *mut usize,
+) -> bool {
+    if state.is_null() || start_offset.is_null() || end_offset.is_null() {
+        return false;
+    }
+
+    let state = unsafe { &*state };
+
+    if let Some(doc) = &state.document {
+        let buffer = doc.borrow();
+        if let Some((start_cursor, end_cursor)) = buffer.selection_range() {
+            unsafe {
+                *start_offset = start_cursor.offset;
+                *end_offset = end_cursor.offset;
+            }
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Copies selected text to clipboard.
+#[unsafe(no_mangle)]
+pub extern "C" fn edit_copy(state: *mut EditState) {
+    if state.is_null() {
+        return;
+    }
+
+    let state = unsafe { &mut *state };
+
+    if let Some(doc) = &state.document {
+        let mut buffer = doc.borrow_mut();
+        buffer.copy(&mut state.clipboard);
+    }
+}
+
+/// Cuts selected text to clipboard.
+#[unsafe(no_mangle)]
+pub extern "C" fn edit_cut(state: *mut EditState) {
+    if state.is_null() {
+        return;
+    }
+
+    let state = unsafe { &mut *state };
+
+    if let Some(doc) = &state.document {
+        let mut buffer = doc.borrow_mut();
+        buffer.cut(&mut state.clipboard);
+    }
+}
+
+/// Pastes text from clipboard.
+#[unsafe(no_mangle)]
+pub extern "C" fn edit_paste(state: *mut EditState) {
+    if state.is_null() {
+        return;
+    }
+
+    let state = unsafe { &mut *state };
+
+    if let Some(doc) = &state.document {
+        let mut buffer = doc.borrow_mut();
+        buffer.paste(&state.clipboard);
+    }
+}
+
+/// Deletes selected text.
+#[unsafe(no_mangle)]
+pub extern "C" fn edit_delete_selection(state: *mut EditState) {
+    if state.is_null() {
+        return;
+    }
+
+    let state = unsafe { &mut *state };
+
+    if let Some(doc) = &state.document {
+        let mut buffer = doc.borrow_mut();
+        buffer.clear_selection();
     }
 }
 

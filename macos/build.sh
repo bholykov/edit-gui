@@ -21,11 +21,30 @@ cd macos
 
 # Step 2: Compile Swift files
 echo -e "${BLUE}[2/3] Compiling Swift files...${NC}"
+
+# Auto-detect SDK path
+SDK_PATH=$(xcrun --show-sdk-path 2>/dev/null || echo "")
+if [ -z "$SDK_PATH" ]; then
+    echo "Warning: Could not detect SDK path, using default"
+    SDK_FLAG=""
+else
+    echo "Using SDK: $SDK_PATH"
+    SDK_FLAG="-sdk $SDK_PATH"
+fi
+
+# Detect architecture
+ARCH=$(uname -m)
+if [ "$ARCH" = "arm64" ]; then
+    TARGET="arm64-apple-macos12.0"
+else
+    TARGET="x86_64-apple-macos12.0"
+fi
+
 MACOS_DIR="$(pwd)"
 swiftc \
     -o EditMacBin \
-    -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk \
-    -target arm64-apple-macos12.0 \
+    $SDK_FLAG \
+    -target $TARGET \
     -framework Cocoa \
     -I ../target/debug \
     -L ../target/debug \

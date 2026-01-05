@@ -10,23 +10,21 @@ class EditView: NSView {
     private let dosText = NSColor(red: 0.75, green: 0.75, blue: 0.75, alpha: 1)  // Light gray
     private let dosMenuBg = NSColor(red: 0.5, green: 0.5, blue: 0.5, alpha: 1)  // Gray
     private let dosMenuText = NSColor.black
-    private let menuBarHeight: CGFloat = 20
     private let statusBarHeight: CGFloat = 20
 
     // Cursor state
     private var cursorVisible = true
     private var cursorBlinkTimer: Timer?
 
-    // Menu state
-    private var activeMenu: Int? = nil  // Index of open menu (nil = none)
-    private var menuRects: [NSRect] = []  // Clickable rects for each menu
-    private let menuItems = [
-        MenuItem(title: "File", items: ["New", "Open...", "Save", "Save As...", "---", "Exit"]),
-        MenuItem(title: "Edit", items: ["Cut", "Copy", "Paste", "Clear"]),
-        MenuItem(title: "Search", items: ["Find...", "Repeat Last Find", "Replace..."]),
-        MenuItem(title: "Options", items: ["Display...", "Help Path..."]),
-        MenuItem(title: "Help", items: ["Getting Started", "About..."])
-    ]
+    // File management
+    private var currentFilePath: String?
+    private var fileMonitor: DispatchSourceFileSystemObject?
+    private var fileDescriptor: Int32 = -1
+
+    // Selection state
+    private var isSelecting = false
+    private var selectionStartRow: Int32 = 0
+    private var selectionStartCol: Int32 = 0
 
     override var isFlipped: Bool {
         return true  // Use top-left origin for easier text drawing
@@ -35,6 +33,9 @@ class EditView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         // wantsLayer = true  // DISABLED - causes draw() to not display properly
+
+        // Register for drag & drop
+        registerForDraggedTypes([.fileURL])
     }
 
     required init?(coder: NSCoder) {
@@ -75,61 +76,110 @@ class EditView: NSView {
         cursorBlinkTimer?.invalidate()
         cursorBlinkTimer = nil
 
+        stopFileMonitoring()
+
         if let state = editState {
             edit_destroy(state)
             editState = nil
         }
     }
 
+    // MARK: - File Operations
+
+    func newFile() {
+        guard let state = editState else { return }
+        edit_new_file(state)
+        currentFilePath = nil
+        setNeedsDisplay(bounds)
+    }
+
+    func openFile(path: String) {
+        guard let state = editState else { return }
+        path.withCString { cPath in
+            edit_open_file(state, cPath)
+        }
+        currentFilePath = path
+        window?.title = "Edit - \((path as NSString).lastPathComponent)"
+
+        // Start file monitoring
+        startFileMonitoring(path: path)
+
+        // Add to recent files
+        NSDocumentController.shared.noteNewRecentDocumentURL(URL(fileURLWithPath: path))
+
+        setNeedsDisplay(bounds)
+    }
+
+    func saveFile() {
+        guard let state = editState else { return }
+
+        if let path = currentFilePath {
+            // Save to existing file
+            path.withCString { cPath in
+                edit_save_file_as(state, cPath)
+            }
+        } else {
+            // No file path, trigger Save As
+            if let controller = window?.windowController?.document as? NSDocument {
+                controller.runModalSavePanel(for: .saveOperation, delegate: self, didSave: nil, contextInfo: nil)
+            }
+        }
+    }
+
+    func saveFileAs(path: String) {
+        guard let state = editState else { return }
+        path.withCString { cPath in
+            edit_save_file_as(state, cPath)
+        }
+        currentFilePath = path
+        window?.title = "Edit - \((path as NSString).lastPathComponent)"
+
+        // Start file monitoring for the new file
+        startFileMonitoring(path: path)
+
+        // Add to recent files
+        NSDocumentController.shared.noteNewRecentDocumentURL(URL(fileURLWithPath: path))
+    }
+
+    // MARK: - Edit Operations
+
+    func cutSelection() {
+        guard let state = editState else { return }
+        edit_cut(state)
+        setNeedsDisplay(bounds)
+    }
+
+    func copySelection() {
+        guard let state = editState else { return }
+        edit_copy(state)
+    }
+
+    func pasteSelection() {
+        guard let state = editState else { return }
+        edit_paste(state)
+        setNeedsDisplay(bounds)
+    }
+
+    func clearSelection() {
+        guard let state = editState else { return }
+        edit_delete_selection(state)
+        setNeedsDisplay(bounds)
+    }
+
+    func selectAllText() {
+        guard let state = editState else { return }
+        edit_select_all(state)
+        setNeedsDisplay(bounds)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 
-        guard let context = NSGraphicsContext.current?.cgContext else { return }
         guard let state = editState else { return }
 
         // Fill with DOS blue background
         dosBlue.setFill()
         bounds.fill()
-
-        // Draw menu bar at top
-        dosMenuBg.setFill()
-        NSRect(x: 0, y: 0, width: bounds.width, height: menuBarHeight).fill()
-
-        let menuAttrs: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: dosMenuText
-        ]
-
-        // Draw menu titles and save their rects
-        menuRects.removeAll()
-        var menuX: CGFloat = 5
-        for (index, menu) in menuItems.enumerated() {
-            let width = CGFloat(menu.title.count * 9) + 10
-            let rect = NSRect(x: menuX, y: 0, width: width, height: menuBarHeight)
-            menuRects.append(rect)
-
-            // Highlight if active
-            if activeMenu == index {
-                NSColor.black.setFill()
-                rect.fill()
-                let highlightAttrs: [NSAttributedString.Key: Any] = [
-                    .font: font,
-                    .foregroundColor: NSColor.white
-                ]
-                let menuStr = NSAttributedString(string: menu.title, attributes: highlightAttrs)
-                menuStr.draw(at: CGPoint(x: menuX + 5, y: 2))
-            } else {
-                let menuStr = NSAttributedString(string: menu.title, attributes: menuAttrs)
-                menuStr.draw(at: CGPoint(x: menuX + 5, y: 2))
-            }
-
-            menuX += width + 5
-        }
-
-        // Draw dropdown menu if one is active
-        if let activeIndex = activeMenu, activeIndex < menuItems.count {
-            drawDropdownMenu(at: activeIndex)
-        }
 
         // Get cursor position
         var cursorRow: Int32 = 0
@@ -140,43 +190,112 @@ class EditView: NSView {
         dosMenuBg.setFill()
         NSRect(x: 0, y: bounds.height - statusBarHeight, width: bounds.width, height: statusBarHeight).fill()
 
+        let statusAttrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: dosMenuText
+        ]
         let statusText = String(format: " Line %d   Col %d   F1=Help", cursorRow + 1, cursorCol + 1)
-        let statusStr = NSAttributedString(string: statusText, attributes: menuAttrs)
+        let statusStr = NSAttributedString(string: statusText, attributes: statusAttrs)
         statusStr.draw(at: CGPoint(x: 5, y: bounds.height - statusBarHeight + 2))
 
-        // Fast path: Get text content directly instead of iterating cells
-        // Update the cache first to ensure we have fresh data
+        // Get text content from Edit
         edit_update_text_cache(state)
-
         let textLen = edit_get_text_length(state)
         guard textLen > 0 else { return }
-
         guard let textPtr = edit_get_text_content(state) else { return }
 
         let textData = Data(bytes: textPtr, count: Int(textLen))
         guard let text = String(data: textData, encoding: .utf8) else { return }
 
-        // Draw text line by line (in the content area between menu and status bars)
+        // Get selection range if any
+        var selectionStartOffset: Int = 0
+        var selectionEndOffset: Int = 0
+        let hasSelection = edit_get_selection_offsets(state, &selectionStartOffset, &selectionEndOffset)
+
+        if hasSelection {
+            print("🔵 Selection: \(selectionStartOffset) to \(selectionEndOffset)")
+        }
+
+        // Draw text line by line (full view, just avoiding status bar)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: dosText
         ]
 
+        // Selection highlight color (light blue)
+        let selectionBg = NSColor(red: 0, green: 0.4, blue: 0.8, alpha: 0.5)
+
         var row = 0
+        var byteOffset = 0
         for line in text.components(separatedBy: "\n") {
-            let y = menuBarHeight + CGFloat(row) * cellSize.height
+            let y = CGFloat(row) * cellSize.height
             if y + cellSize.height > bounds.height - statusBarHeight {
                 break  // Don't draw beyond status bar
             }
+
+            // Calculate byte offsets for this line
+            let lineBytes = line.utf8.count
+            let lineStartOffset = byteOffset
+            let lineEndOffset = byteOffset + lineBytes
+
+            // Draw selection highlight if this line overlaps with selection
+            if hasSelection && selectionStartOffset < lineEndOffset && selectionEndOffset > lineStartOffset {
+                // Calculate which bytes in this line are selected
+                let selStart = max(0, selectionStartOffset - lineStartOffset)
+                let selEnd = min(lineBytes, selectionEndOffset - lineStartOffset)
+
+                // Convert byte offsets to character/column positions
+                // We need to decode UTF-8 properly
+                let lineData = Data(line.utf8)
+
+                var startCol = 0
+                var endCol = 0
+                var byteIndex = 0
+                var charIndex = 0
+
+                for byte in lineData {
+                    if byteIndex == selStart {
+                        startCol = charIndex
+                    }
+                    if byteIndex == selEnd {
+                        endCol = charIndex
+                        break
+                    }
+
+                    // UTF-8 continuation bytes start with 10xxxxxx (0x80-0xBF)
+                    // Only count non-continuation bytes as characters
+                    if (byte & 0xC0) != 0x80 {
+                        charIndex += 1
+                    }
+                    byteIndex += 1
+                }
+
+                // If we didn't hit selEnd in the loop, it extends to the end
+                if byteIndex <= selEnd {
+                    endCol = charIndex
+                }
+
+                let highlightX = 5 + CGFloat(startCol) * cellSize.width
+                let highlightWidth = CGFloat(endCol - startCol) * cellSize.width
+
+                if highlightWidth > 0 {
+                    selectionBg.setFill()
+                    NSRect(x: highlightX, y: y, width: highlightWidth, height: cellSize.height).fill()
+                }
+            }
+
+            // Draw the text
             let attrString = NSAttributedString(string: line, attributes: attributes)
             attrString.draw(at: CGPoint(x: 5, y: y))
+
+            byteOffset = lineEndOffset + 1  // +1 for the newline character
             row += 1
         }
 
         // Draw cursor (blinking block)
         if cursorVisible {
             let cursorX = 5 + CGFloat(cursorCol) * cellSize.width
-            let cursorY = menuBarHeight + CGFloat(cursorRow) * cellSize.height
+            let cursorY = CGFloat(cursorRow) * cellSize.height
 
             dosText.setFill()
             let cursorRect = NSRect(x: cursorX, y: cursorY, width: cellSize.width, height: cellSize.height)
@@ -200,53 +319,6 @@ class EditView: NSView {
         }
     }
 
-    func drawDropdownMenu(at menuIndex: Int) {
-        let menu = menuItems[menuIndex]
-        let menuRect = menuRects[menuIndex]
-
-        // Calculate dropdown dimensions
-        let maxWidth = menu.items.map { $0.count * 9 + 20 }.max() ?? 100
-        let dropdownHeight = CGFloat(menu.items.count) * cellSize.height + 4
-        let dropdownRect = NSRect(
-            x: menuRect.minX,
-            y: menuBarHeight,
-            width: CGFloat(maxWidth),
-            height: dropdownHeight
-        )
-
-        // Draw dropdown background (light gray)
-        NSColor(white: 0.85, alpha: 1).setFill()
-        dropdownRect.fill()
-
-        // Draw dropdown border (black)
-        NSColor.black.setStroke()
-        let borderPath = NSBezierPath(rect: dropdownRect)
-        borderPath.lineWidth = 2
-        borderPath.stroke()
-
-        // Draw menu items
-        let itemAttrs: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: NSColor.black
-        ]
-
-        var itemY = menuBarHeight + 2
-        for item in menu.items {
-            if item == "---" {
-                // Draw separator
-                NSColor.darkGray.setStroke()
-                let separatorPath = NSBezierPath()
-                separatorPath.move(to: CGPoint(x: dropdownRect.minX + 2, y: itemY + cellSize.height / 2))
-                separatorPath.line(to: CGPoint(x: dropdownRect.maxX - 2, y: itemY + cellSize.height / 2))
-                separatorPath.lineWidth = 1
-                separatorPath.stroke()
-            } else {
-                let itemStr = NSAttributedString(string: " " + item, attributes: itemAttrs)
-                itemStr.draw(at: CGPoint(x: dropdownRect.minX, y: itemY))
-            }
-            itemY += cellSize.height
-        }
-    }
 
     override func keyDown(with event: NSEvent) {
         guard let state = editState else { return }
@@ -254,6 +326,30 @@ class EditView: NSView {
         // Get key code and modifiers
         let keyCode = event.keyCode
         let modifiers = event.modifierFlags
+
+        // Let Cmd+shortcuts be handled by menu items
+        if modifiers.contains(.command) {
+            // Pass through to responder chain (menu items will handle)
+            super.keyDown(with: event)
+            return
+        }
+
+        // Handle Shift+Arrow keys for selection
+        let isArrowKey = (keyCode >= 123 && keyCode <= 126) // Left, Right, Down, Up
+        if modifiers.contains(.shift) && isArrowKey {
+            // Start selection if not already selecting
+            if !isSelecting {
+                edit_selection_start(state)
+                isSelecting = true
+
+                // Get current cursor position as selection start
+                edit_get_cursor_pos(state, &selectionStartRow, &selectionStartCol)
+            }
+        } else if isSelecting && !modifiers.contains(.shift) {
+            // Clear selection if Shift is released
+            edit_selection_clear(state)
+            isSelecting = false
+        }
 
         // Convert NSEvent modifiers to Edit's modifier format
         var editModifiers: UInt32 = 0
@@ -266,17 +362,22 @@ class EditView: NSView {
         if modifiers.contains(.option) {
             editModifiers |= 0x04
         }
-        if modifiers.contains(.command) {
-            editModifiers |= 0x08
-        }
 
         // Send to Edit
         edit_handle_key(state, keyCode, editModifiers)
 
+        // If we're selecting, extend selection to new cursor position
+        if isSelecting {
+            var newRow: Int32 = 0
+            var newCol: Int32 = 0
+            edit_get_cursor_pos(state, &newRow, &newCol)
+            edit_selection_extend(state, newRow, newCol)
+        }
+
         // Reset cursor visibility on keypress
         cursorVisible = true
 
-        // Mark for redraw (async is fine now that we fixed the flip() issue)
+        // Mark for redraw
         setNeedsDisplay(bounds)
     }
 
@@ -286,38 +387,27 @@ class EditView: NSView {
         // Get mouse location in view coordinates
         let location = convert(event.locationInWindow, from: nil)
 
-        // Check if click is in menu bar
-        if location.y < menuBarHeight {
-            handleMenuClick(at: location)
-            return
-        }
-
-        // Check if click is in dropdown menu
-        if let menuIndex = activeMenu {
-            if handleDropdownClick(at: location, menuIndex: menuIndex) {
-                return
-            }
-        }
-
-        // Click outside menu - close any open menu
-        if activeMenu != nil {
-            activeMenu = nil
-            setNeedsDisplay(bounds)
-            return
-        }
-
-        // Check if click is in the text area (between menu and status bars)
-        guard location.y >= menuBarHeight && location.y < bounds.height - statusBarHeight else {
+        // Check if click is in the text area (above status bar)
+        guard location.y < bounds.height - statusBarHeight else {
             return
         }
 
         // Convert to text coordinates
-        let textY = location.y - menuBarHeight
-        let row = Int32(textY / cellSize.height)
+        let row = Int32(location.y / cellSize.height)
         let col = Int32(max(0, location.x - 5) / cellSize.width)
+
+        // Clear any existing selection
+        edit_selection_clear(state)
+        isSelecting = false
 
         // Set cursor position
         edit_set_cursor_pos(state, row, col)
+
+        // Start selection for potential drag
+        edit_selection_start(state)
+        isSelecting = true
+        selectionStartRow = row
+        selectionStartCol = col
 
         // Reset cursor visibility on click
         cursorVisible = true
@@ -326,81 +416,113 @@ class EditView: NSView {
         setNeedsDisplay(bounds)
     }
 
-    func handleMenuClick(at location: CGPoint) {
-        // Find which menu was clicked
-        for (index, rect) in menuRects.enumerated() {
-            if rect.contains(location) {
-                if activeMenu == index {
-                    // Clicked on already-open menu - close it
-                    activeMenu = nil
-                } else {
-                    // Open this menu
-                    activeMenu = index
-                }
-                setNeedsDisplay(bounds)
-                return
-            }
+    override func mouseDragged(with event: NSEvent) {
+        guard let state = editState else { return }
+        guard isSelecting else { return }
+
+        // Get mouse location in view coordinates
+        let location = convert(event.locationInWindow, from: nil)
+
+        // Check if drag is in the text area
+        guard location.y < bounds.height - statusBarHeight else {
+            return
         }
+
+        // Convert to text coordinates
+        let row = Int32(location.y / cellSize.height)
+        let col = Int32(max(0, location.x - 5) / cellSize.width)
+
+        // Extend selection to new position
+        edit_set_cursor_pos(state, row, col)
+        edit_selection_extend(state, row, col)
+
+        // Reset cursor visibility
+        cursorVisible = true
+
+        // Mark for redraw
+        setNeedsDisplay(bounds)
     }
 
-    func handleDropdownClick(at location: CGPoint, menuIndex: Int) -> Bool {
-        let menu = menuItems[menuIndex]
-        let menuRect = menuRects[menuIndex]
+    override func mouseUp(with event: NSEvent) {
+        // Keep selection active even after mouse up
+        // Don't stop selecting - let user continue with keyboard
+    }
 
-        // Calculate dropdown rect
-        let maxWidth = menu.items.map { $0.count * 9 + 20 }.max() ?? 100
-        let dropdownHeight = CGFloat(menu.items.count) * cellSize.height + 4
-        let dropdownRect = NSRect(
-            x: menuRect.minX,
-            y: menuBarHeight,
-            width: CGFloat(maxWidth),
-            height: dropdownHeight
+
+    // MARK: - File Monitoring
+
+    func startFileMonitoring(path: String) {
+        // Stop any existing monitoring
+        stopFileMonitoring()
+
+        // Open file descriptor for monitoring
+        fileDescriptor = open(path, O_EVTONLY)
+        guard fileDescriptor >= 0 else {
+            print("Failed to open file descriptor for monitoring: \(path)")
+            return
+        }
+
+        // Create dispatch source for file system events
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fileDescriptor,
+            eventMask: [.write, .delete, .rename],
+            queue: DispatchQueue.main
         )
 
-        // Check if click is inside dropdown
-        if dropdownRect.contains(location) {
-            // Calculate which item was clicked
-            let relativeY = location.y - menuBarHeight - 2
-            let itemIndex = Int(relativeY / cellSize.height)
+        source.setEventHandler { [weak self] in
+            self?.handleFileChange(path: path)
+        }
 
-            if itemIndex >= 0 && itemIndex < menu.items.count {
-                let item = menu.items[itemIndex]
-                executeMenuAction(menu: menu.title, item: item)
-                activeMenu = nil
-                setNeedsDisplay(bounds)
+        source.setCancelHandler { [weak self] in
+            if let fd = self?.fileDescriptor, fd >= 0 {
+                close(fd)
+                self?.fileDescriptor = -1
             }
-            return true
         }
 
-        return false
+        source.resume()
+        fileMonitor = source
     }
 
-    func executeMenuAction(menu: String, item: String) {
-        print("Menu action: \(menu) -> \(item)")
-
-        switch (menu, item) {
-        case ("File", "Exit"):
-            NSApplication.shared.terminate(nil)
-
-        case ("File", "New"):
-            // Clear the document (implement later)
-            print("New document")
-
-        case ("Help", "About..."):
-            showAboutDialog()
-
-        default:
-            print("Menu action not implemented: \(menu) -> \(item)")
-        }
+    func stopFileMonitoring() {
+        fileMonitor?.cancel()
+        fileMonitor = nil
     }
 
-    func showAboutDialog() {
+    func handleFileChange(path: String) {
         let alert = NSAlert()
-        alert.messageText = "Edit for macOS"
-        alert.informativeText = "A native macOS implementation of MS-DOS Edit\n\nBuilt with Swift and Rust"
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
+        alert.messageText = "File Changed"
+        alert.informativeText = "The file \"\((path as NSString).lastPathComponent)\" has been modified by another application. Do you want to reload it?"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Reload")
+        alert.addButton(withTitle: "Keep Current")
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            // Reload the file
+            openFile(path: path)
+        }
+    }
+
+    // MARK: - Drag & Drop Support
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        // Check if we have a file URL
+        if sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: nil) {
+            return .copy
+        }
+        return []
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+              let url = urls.first else {
+            return false
+        }
+
+        // Open the dropped file
+        openFile(path: url.path)
+        return true
     }
 }
 
@@ -441,10 +563,44 @@ func edit_get_cursor_pos(_ state: OpaquePointer, _ row: UnsafeMutablePointer<Int
 @_silgen_name("edit_set_cursor_pos")
 func edit_set_cursor_pos(_ state: OpaquePointer, _ row: Int32, _ col: Int32)
 
-struct MenuItem {
-    let title: String
-    let items: [String]
-}
+@_silgen_name("edit_new_file")
+func edit_new_file(_ state: OpaquePointer)
+
+@_silgen_name("edit_open_file")
+func edit_open_file(_ state: OpaquePointer, _ path: UnsafePointer<CChar>)
+
+@_silgen_name("edit_save_file_as")
+func edit_save_file_as(_ state: OpaquePointer, _ path: UnsafePointer<CChar>)
+
+@_silgen_name("edit_select_all")
+func edit_select_all(_ state: OpaquePointer)
+
+@_silgen_name("edit_selection_start")
+func edit_selection_start(_ state: OpaquePointer)
+
+@_silgen_name("edit_selection_extend")
+func edit_selection_extend(_ state: OpaquePointer, _ row: Int32, _ col: Int32)
+
+@_silgen_name("edit_selection_clear")
+func edit_selection_clear(_ state: OpaquePointer)
+
+@_silgen_name("edit_has_selection")
+func edit_has_selection(_ state: OpaquePointer) -> Bool
+
+@_silgen_name("edit_get_selection_offsets")
+func edit_get_selection_offsets(_ state: OpaquePointer, _ startOffset: UnsafeMutablePointer<Int>, _ endOffset: UnsafeMutablePointer<Int>) -> Bool
+
+@_silgen_name("edit_copy")
+func edit_copy(_ state: OpaquePointer)
+
+@_silgen_name("edit_cut")
+func edit_cut(_ state: OpaquePointer)
+
+@_silgen_name("edit_paste")
+func edit_paste(_ state: OpaquePointer)
+
+@_silgen_name("edit_delete_selection")
+func edit_delete_selection(_ state: OpaquePointer)
 
 struct FramebufferCell {
     let ch: UInt32          // Rust char (4 bytes, UTF-32)

@@ -69,6 +69,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         fileMenu.addItem(NSMenuItem(title: "New", action: #selector(editorViewController.newFile(_:)), keyEquivalent: "n"))
         fileMenu.addItem(NSMenuItem(title: "Open...", action: #selector(editorViewController.openFile(_:)), keyEquivalent: "o"))
 
+        // Recent files submenu
+        let recentMenuItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
+        let recentMenu = NSMenu(title: "Open Recent")
+        recentMenuItem.submenu = recentMenu
+        fileMenu.addItem(recentMenuItem)
+
+        // Add "Clear Menu" item to recent files
+        recentMenu.addItem(NSMenuItem(title: "Clear Menu", action: #selector(NSDocumentController.clearRecentDocuments(_:)), keyEquivalent: ""))
+
+        fileMenu.addItem(NSMenuItem.separator())
+        fileMenu.addItem(NSMenuItem(title: "Save", action: #selector(editorViewController.saveFile(_:)), keyEquivalent: "s"))
+        fileMenu.addItem(NSMenuItem(title: "Save As...", action: #selector(editorViewController.saveFileAs(_:)), keyEquivalent: "S"))
+
+        // Edit menu
+        let editMenuItem = NSMenuItem()
+        editMenuItem.title = "Edit"
+        mainMenu.addItem(editMenuItem)
+
+        let editMenu = NSMenu(title: "Edit")
+        editMenuItem.submenu = editMenu
+
+        editMenu.addItem(NSMenuItem(title: "Cut", action: #selector(editorViewController.cut(_:)), keyEquivalent: "x"))
+        editMenu.addItem(NSMenuItem(title: "Copy", action: #selector(editorViewController.copy(_:)), keyEquivalent: "c"))
+        editMenu.addItem(NSMenuItem(title: "Paste", action: #selector(editorViewController.paste(_:)), keyEquivalent: "v"))
+        editMenu.addItem(NSMenuItem(title: "Clear", action: #selector(editorViewController.clear(_:)), keyEquivalent: ""))
+        editMenu.addItem(NSMenuItem.separator())
+        editMenu.addItem(NSMenuItem(title: "Select All", action: #selector(editorViewController.selectAllText(_:)), keyEquivalent: "a"))
+
         NSApplication.shared.mainMenu = mainMenu
     }
 }
