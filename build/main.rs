@@ -16,6 +16,10 @@ enum TargetOs {
 }
 
 fn main() {
+    // Tell cargo to only re-run this build script when the build directory
+    // changes — prevents cargo from scanning the entire repo via libgit2.
+    println!("cargo:rerun-if-changed=build/");
+
     let target_os = match env_opt("CARGO_CFG_TARGET_OS").as_str() {
         "windows" => TargetOs::Windows,
         "macos" | "ios" => TargetOs::MacOS,
