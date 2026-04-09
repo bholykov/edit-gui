@@ -1,0 +1,38 @@
+name: EditApp
+options:
+  bundleIdPrefix: com.yourcompany
+  deploymentTarget:
+    macOS: "12.0"
+  xcodeVersion: "15"
+
+packages:
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    from: "1.0.0"
+
+targets:
+  EditApp:
+    type: application
+    platform: macOS
+    deploymentTarget: "12.0"
+    sources:
+      - path: Sources
+    resources:
+      - path: Resources
+    info:
+      path: Sources/Info.plist
+    dependencies:
+      - package: SwiftTerm
+    preBuildScripts:
+      - name: Build MS Edit Binary
+        shell: /bin/bash
+        script: |
+          "$SRCROOT/../scripts/build-binary.sh"
+        outputFiles:
+          - $(SRCROOT)/Resources/edit
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.yourcompany.EditApp
+      PRODUCT_NAME: EditApp
+      SWIFT_VERSION: "5.9"
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+      ENABLE_HARDENED_RUNTIME: YES
