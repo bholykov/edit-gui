@@ -27,8 +27,14 @@ class TerminalViewController: NSViewController {
 
     private func setupTerminal(args: [String] = []) {
         terminalView = LocalProcessTerminalView(frame: view.bounds)
-        terminalView.autoresizingMask = [.width, .height]
+        terminalView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(terminalView)
+        NSLayoutConstraint.activate([
+            terminalView.topAnchor.constraint(equalTo: view.topAnchor),
+            terminalView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            terminalView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            terminalView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
 
         terminalView.processDelegate = self
 
