@@ -5,7 +5,7 @@ import SwiftTerm
 /// native macOS interactions (context menu, file pickers).
 class TerminalViewController: NSViewController {
 
-    private var terminalView: LocalProcessTerminalView!
+    private var terminalView: EditTerminalView!
     private var processStarted = false
     private var pendingOpenPath: String?
 
@@ -28,7 +28,7 @@ class TerminalViewController: NSViewController {
     // MARK: - Terminal setup
 
     private func setupTerminal(args: [String] = []) {
-        terminalView = LocalProcessTerminalView(frame: view.bounds)
+        terminalView = EditTerminalView(frame: view.bounds)
         terminalView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(terminalView)
         NSLayoutConstraint.activate([
