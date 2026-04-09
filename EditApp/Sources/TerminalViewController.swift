@@ -8,6 +8,7 @@ class TerminalViewController: NSViewController {
     private var terminalView: EditTerminalView!
     private var processStarted = false
     private var pendingOpenPath: String?
+    private var eventMonitors: [Any] = []
 
     // MARK: - View lifecycle
 
@@ -45,6 +46,57 @@ class TerminalViewController: NSViewController {
             return
         }
         terminalView.startProcess(executable: binary, args: args, execName: "edit")
+        setupEventMonitors()
+    }
+
+    private func setupEventMonitors() {
+        // Scroll wheel → PTY arrow keys.
+        // SwiftTerm's scrollWheel (public, not open) routes delta to its scrollback
+        // buffer, which is always empty for MS Edit (a full-screen TUI). We consume
+        // the event here and send Up/Down arrow sequences to the PTY instead.
+        addMonitor(for: .scrollWheel) { [weak self] event in
+            guard let self, event.window == self.view.window,
+                  event.deltaY != 0 else { return event }
+            let lines = max(1, Int(abs(event.deltaY).rounded()))
+            let appCursor = self.terminalView.terminal.applicationCursor
+            let seq = event.deltaY > 0
+                ? (appCursor ? "\u{1b}OA" : "\u{1b}[A")
+                : (appCursor ? "\u{1b}OB" : "\u{1b}[B")
+            for _ in 0..<lines { self.send(seq) }
+            return nil  // consumed — don't pass to SwiftTerm's scrollback
+        }
+
+        // Shift+click/drag: disable PTY mouse reporting before SwiftTerm sees the
+        // event, so SwiftTerm performs native selection instead of forwarding to
+        // MS Edit (?1002 cell-motion mode). Re-enable on mouse-up.
+        addMonitor(for: .leftMouseDown) { [weak self] event in
+            guard let self, event.window == self.view.window,
+                  event.modifierFlags.contains(.shift) else { return event }
+            self.terminalView.allowMouseReporting = false
+            return event
+        }
+        addMonitor(for: .leftMouseDragged) { [weak self] event in
+            guard let self, event.window == self.view.window,
+                  event.modifierFlags.contains(.shift) else { return event }
+            self.terminalView.allowMouseReporting = false
+            return event
+        }
+        addMonitor(for: .leftMouseUp) { [weak self] event in
+            guard let self, event.window == self.view.window else { return event }
+            self.terminalView.allowMouseReporting = true
+            return event
+        }
+    }
+
+    private func addMonitor(for mask: NSEvent.EventTypeMask,
+                            handler: @escaping (NSEvent) -> NSEvent?) {
+        if let m = NSEvent.addLocalMonitorForEvents(matching: mask, handler: handler) {
+            eventMonitors.append(m)
+        }
+    }
+
+    deinit {
+        eventMonitors.forEach { NSEvent.removeMonitor($0) }
     }
 
     private func editBinaryPath() -> String? {
