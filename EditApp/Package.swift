@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "EditApp",
-    platforms: [.macOS(.v12)],
+    platforms: [.macOS(.v13)],
     dependencies: [
         .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.0.0"),
     ],
