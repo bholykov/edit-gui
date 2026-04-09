@@ -14,9 +14,7 @@ let package = Package(
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
             ],
             path: "Sources",
-            resources: [
-                .copy("Info.plist"),
-            ]
+            exclude: ["Info.plist"]
         ),
     ]
 )
