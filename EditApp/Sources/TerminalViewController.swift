@@ -6,6 +6,8 @@ import SwiftTerm
 class TerminalViewController: NSViewController {
 
     private var terminalView: LocalProcessTerminalView!
+    private var processStarted = false
+    private var pendingOpenPath: String?
 
     // MARK: - View lifecycle
 
@@ -69,7 +71,12 @@ class TerminalViewController: NSViewController {
 
     /// Opens a file by injecting Ctrl+P (Go to File) followed by the path.
     /// MS Edit's "Go to File" dialog accepts a typed path and confirms on Enter.
+    /// If called before the process has started, the open is queued until ready.
     func open(path: String) {
+        guard processStarted else {
+            pendingOpenPath = path
+            return
+        }
         send("\u{10}")  // Ctrl+P — opens Go to File dialog
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             self.send(path + "\r")
@@ -112,16 +119,16 @@ class TerminalViewController: NSViewController {
 
     // Ctrl codes 0x01–0x1A map directly to Ctrl+A through Ctrl+Z in MS Edit's
     // input parser (src/input.rs: the `..='\x1a'` arm shifts the byte to A–Z).
-    @objc private func menuNew()      { send("\u{0e}") }  // Ctrl+N
-    @objc private func menuSave()     { send("\u{13}") }  // Ctrl+S
-    @objc private func menuClose()    { send("\u{17}") }  // Ctrl+W
-    @objc private func menuUndo()     { send("\u{1a}") }  // Ctrl+Z
-    @objc private func menuRedo()     { send("\u{19}") }  // Ctrl+Y
-    @objc private func menuFind()     { send("\u{06}") }  // Ctrl+F
-    @objc private func menuReplace()  { send("\u{12}") }  // Ctrl+R
-    @objc private func menuGoToLine() { send("\u{07}") }  // Ctrl+G
+    @objc func menuNew()      { send("\u{0e}") }  // Ctrl+N
+    @objc func menuSave()     { send("\u{13}") }  // Ctrl+S
+    @objc func menuClose()    { send("\u{17}") }  // Ctrl+W
+    @objc func menuUndo()     { send("\u{1a}") }  // Ctrl+Z
+    @objc func menuRedo()     { send("\u{19}") }  // Ctrl+Y
+    @objc func menuFind()     { send("\u{06}") }  // Ctrl+F
+    @objc func menuReplace()  { send("\u{12}") }  // Ctrl+R
+    @objc func menuGoToLine() { send("\u{07}") }  // Ctrl+G
 
-    @objc private func menuOpen() {
+    @objc func menuOpen() {
         // Show a native file picker, then inject the path via Go to File (Ctrl+P).
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
@@ -146,6 +153,17 @@ extension TerminalViewController: LocalProcessTerminalViewDelegate {
 
     func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {
         // SwiftTerm propagates SIGWINCH automatically; nothing extra needed.
+        // Use the first resize event as a signal that the process is live.
+        if !processStarted {
+            processStarted = true
+            if let path = pendingOpenPath {
+                pendingOpenPath = nil
+                // Give MS Edit extra time to render its initial UI before injecting.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    self.open(path: path)
+                }
+            }
+        }
     }
 
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
