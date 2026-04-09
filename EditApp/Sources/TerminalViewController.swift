@@ -32,16 +32,26 @@ class TerminalViewController: NSViewController {
 
         terminalView.processDelegate = self
 
-        let binary = editBinaryPath()
+        guard let binary = editBinaryPath() else {
+            showMissingBinaryError()
+            return
+        }
         terminalView.startProcess(executable: binary, args: args, execName: "edit")
     }
 
-    private func editBinaryPath() -> String {
-        // Prefer the binary bundled in Resources; fall back to PATH for dev builds.
+    private func editBinaryPath() -> String? {
+        // 1. Proper .app bundle (Resources/edit)
         if let bundled = Bundle.main.path(forResource: "edit", ofType: nil) {
             return bundled
         }
-        return "/usr/local/bin/edit"
+        // 2. SPM dev build: binary sits next to the EditApp executable
+        let execDir = URL(fileURLWithPath: CommandLine.arguments[0])
+            .deletingLastPathComponent()
+        let devPath = execDir.appendingPathComponent("edit").path
+        if FileManager.default.fileExists(atPath: devPath) {
+            return devPath
+        }
+        return nil
     }
 
     // MARK: - Programmatic PTY input
@@ -141,7 +151,28 @@ extension TerminalViewController: LocalProcessTerminalViewDelegate {
     }
 
     func processTerminated(source: TerminalView, exitCode: Int32?) {
+        // Only quit the app if edit exited cleanly (user closed it).
+        // exitCode nil means the process never started — don't quit.
+        guard exitCode != nil else { return }
         DispatchQueue.main.async {
+            NSApplication.shared.terminate(nil)
+        }
+    }
+
+    private func showMissingBinaryError() {
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.messageText = "edit binary not found"
+            alert.informativeText = """
+                Build the MS Edit binary first, then copy it next to this executable:
+
+                rsync -a --exclude='.git' --exclude='target' ~/edit-gui/ /tmp/edit-src/
+                cd /tmp/edit-src && cargo build --release
+                cp target/release/edit ~/edit-gui/EditApp/.build/debug/edit
+                """
+            alert.alertStyle = .critical
+            alert.addButton(withTitle: "Quit")
+            alert.runModal()
             NSApplication.shared.terminate(nil)
         }
     }
