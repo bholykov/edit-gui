@@ -100,9 +100,12 @@ class TerminalViewController: NSViewController {
         }
         addMonitor(for: .leftMouseUp) { [weak self] event in
             guard let self else { return event }
-            if self.inSelectionMode {
-                self.inSelectionMode = false
-                self.terminalView.allowMouseReporting = true
+            // Always restore mouse reporting on any mouse-up — safety net in case
+            // leftMouseDragged set inSelectionMode without a matching leftMouseUp.
+            let wasSelecting = self.inSelectionMode
+            self.inSelectionMode = false
+            self.terminalView.allowMouseReporting = true
+            if wasSelecting {
                 // Keep terminal view as first responder so Cmd+C reaches SwiftTerm.
                 self.view.window?.makeFirstResponder(self.terminalView)
             }

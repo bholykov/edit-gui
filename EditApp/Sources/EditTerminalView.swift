@@ -14,7 +14,10 @@ class EditTerminalView: LocalProcessTerminalView {
     override func layout() {
         super.layout()
         // SwiftTerm's NSScroller is repositioned (via autoresizingMask) on every
-        // layout pass. Hide it AND zero its frame so it takes no space.
+        // layout pass. Re-hide it here. Note: do NOT zero the frame — changing a
+        // subview's frame inside layout() triggers setNeedsLayout on the parent,
+        // causing an infinite loop and blocking the main thread (breaks keyboard).
+        // isHidden is sufficient because updateScroller() never resets it.
         hideScrollers(in: self)
     }
 
@@ -22,7 +25,6 @@ class EditTerminalView: LocalProcessTerminalView {
         for sub in view.subviews {
             if sub is NSScroller {
                 sub.isHidden = true
-                sub.frame = .zero
             } else {
                 hideScrollers(in: sub)
             }
