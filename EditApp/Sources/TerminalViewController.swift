@@ -9,6 +9,8 @@ class TerminalViewController: NSViewController {
     private var processStarted = false
     private var pendingOpenPath: String?
     private var eventMonitors: [Any] = []
+    /// True while a drag or multi-click selection gesture is in progress.
+    private var inSelectionMode = false
 
     // MARK: - View lifecycle
 
@@ -66,24 +68,44 @@ class TerminalViewController: NSViewController {
             return nil  // consumed — don't pass to SwiftTerm's scrollback
         }
 
-        // Shift+click/drag: disable PTY mouse reporting before SwiftTerm sees the
-        // event, so SwiftTerm performs native selection instead of forwarding to
-        // MS Edit (?1002 cell-motion mode). Re-enable on mouse-up.
+        // Text selection — bypass PTY mouse reporting (?1002) so SwiftTerm can
+        // perform native selection. Three gestures enter selection mode:
+        //   • Double-click (SwiftTerm word selection, then Cmd+C to copy)
+        //   • Any drag (click-and-drag to select a range)
+        //   • Shift+click (extend an existing selection)
+        // Single clicks always pass through to the PTY (MS Edit cursor positioning).
         addMonitor(for: .leftMouseDown) { [weak self] event in
-            guard let self, event.window == self.view.window,
-                  event.modifierFlags.contains(.shift) else { return event }
-            self.terminalView.allowMouseReporting = false
+            guard let self, event.window == self.view.window else { return event }
+            let isSelectionGesture = event.clickCount >= 2
+                || event.modifierFlags.contains(.shift)
+            if isSelectionGesture {
+                self.inSelectionMode = true
+                self.terminalView.allowMouseReporting = false
+            } else {
+                // Single click: pass to PTY, reset any previous selection state.
+                self.inSelectionMode = false
+            }
             return event
         }
+        // Any drag (not just Shift-drag) starts SwiftTerm selection.
+        // The preceding mouseDown may have already gone to the PTY (single click
+        // before a drag), but that is acceptable — it only moves MS Edit's cursor.
         addMonitor(for: .leftMouseDragged) { [weak self] event in
-            guard let self, event.window == self.view.window,
-                  event.modifierFlags.contains(.shift) else { return event }
-            self.terminalView.allowMouseReporting = false
+            guard let self else { return event }
+            if !self.inSelectionMode {
+                self.inSelectionMode = true
+                self.terminalView.allowMouseReporting = false
+            }
             return event
         }
         addMonitor(for: .leftMouseUp) { [weak self] event in
-            guard let self, event.window == self.view.window else { return event }
-            self.terminalView.allowMouseReporting = true
+            guard let self else { return event }
+            if self.inSelectionMode {
+                self.inSelectionMode = false
+                self.terminalView.allowMouseReporting = true
+                // Keep terminal view as first responder so Cmd+C reaches SwiftTerm.
+                self.view.window?.makeFirstResponder(self.terminalView)
+            }
             return event
         }
     }
@@ -171,6 +193,11 @@ class TerminalViewController: NSViewController {
 
     // Ctrl codes 0x01–0x1A map directly to Ctrl+A through Ctrl+Z in MS Edit's
     // input parser (src/input.rs: the `..='\x1a'` arm shifts the byte to A–Z).
+    /// Explicitly copies SwiftTerm's current text selection to the clipboard.
+    /// SwiftTerm's own copy: method is @objc open and IS in the responder chain,
+    /// but calling it directly ensures it runs even if responder dispatch misroutes.
+    @objc func menuCopy() { terminalView.copy(self) }
+
     @objc func menuNew()      { send("\u{0e}") }  // Ctrl+N
     @objc func menuSave()     { send("\u{13}") }  // Ctrl+S
     @objc func menuClose()    { send("\u{17}") }  // Ctrl+W

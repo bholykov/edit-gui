@@ -61,8 +61,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(mi("Redo", "Z", #selector(TerminalViewController.menuRedo)))
         menu.addItem(.separator())
         // Cut/Copy/Paste target the responder chain (standard behaviour)
-        menu.addItem(NSMenuItem(title: "Cut",   action: #selector(NSText.cut(_:)),   keyEquivalent: "x"))
-        menu.addItem(NSMenuItem(title: "Copy",  action: #selector(NSText.copy(_:)),  keyEquivalent: "c"))
+        menu.addItem(NSMenuItem(title: "Cut",   action: #selector(NSText.cut(_:)),              keyEquivalent: "x"))
+        // menuCopy is on TerminalViewController (responder chain); it calls
+        // terminalView.copy() directly, ensuring SwiftTerm's selection is used.
+        menu.addItem(mi("Copy",  "c", #selector(TerminalViewController.menuCopy)))
         menu.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
         menu.addItem(.separator())
         menu.addItem(mi("Find…",         "f", #selector(TerminalViewController.menuFind)))
