@@ -52,18 +52,17 @@ class TerminalViewController: NSViewController {
     }
 
     private func setupEventMonitors() {
-        // Scroll wheel → PTY arrow keys.
+        // Scroll wheel → PTY scroll sequences.
         // SwiftTerm's scrollWheel (public, not open) routes delta to its scrollback
         // buffer, which is always empty for MS Edit (a full-screen TUI). We consume
-        // the event here and send Up/Down arrow sequences to the PTY instead.
+        // the event here and send Ctrl+Up / Ctrl+Down (ESC[1;5A / ESC[1;5B) so MS
+        // Edit scrolls the viewport without moving the cursor.
         addMonitor(for: .scrollWheel) { [weak self] event in
             guard let self, event.window == self.view.window,
                   event.deltaY != 0 else { return event }
             let lines = max(1, Int(abs(event.deltaY).rounded()))
-            let appCursor = self.terminalView.terminal.applicationCursor
-            let seq = event.deltaY > 0
-                ? (appCursor ? "\u{1b}OA" : "\u{1b}[A")
-                : (appCursor ? "\u{1b}OB" : "\u{1b}[B")
+            // Ctrl+Up = scroll up (content moves down), Ctrl+Down = scroll down
+            let seq = event.deltaY > 0 ? "\u{1b}[1;5A" : "\u{1b}[1;5B"
             for _ in 0..<lines { self.send(seq) }
             return nil  // consumed — don't pass to SwiftTerm's scrollback
         }
@@ -170,18 +169,26 @@ class TerminalViewController: NSViewController {
     private func buildContextMenu() -> NSMenu {
         let menu = NSMenu(title: "")
 
-        menu.addItem(item("New",          action: #selector(menuNew)))
-        menu.addItem(item("Open…",        action: #selector(menuOpen)))
+        menu.addItem(item("New",           action: #selector(menuNew)))
+        menu.addItem(item("Open…",         action: #selector(menuOpen)))
         menu.addItem(.separator())
-        menu.addItem(item("Save",         action: #selector(menuSave)))
-        menu.addItem(item("Close",        action: #selector(menuClose)))
+        menu.addItem(item("Save",          action: #selector(menuSave)))
+        menu.addItem(item("Close",         action: #selector(menuClose)))
         menu.addItem(.separator())
-        menu.addItem(item("Undo",         action: #selector(menuUndo)))
-        menu.addItem(item("Redo",         action: #selector(menuRedo)))
+        menu.addItem(item("Undo",          action: #selector(menuUndo)))
+        menu.addItem(item("Redo",          action: #selector(menuRedo)))
         menu.addItem(.separator())
-        menu.addItem(item("Find…",        action: #selector(menuFind)))
-        menu.addItem(item("Replace…",     action: #selector(menuReplace)))
-        menu.addItem(item("Go to Line…",  action: #selector(menuGoToLine)))
+        menu.addItem(item("Cut",           action: #selector(menuCut)))
+        menu.addItem(item("Copy",          action: #selector(menuCopy)))
+        menu.addItem(item("Paste",         action: #selector(menuPaste)))
+        menu.addItem(item("Select All",    action: #selector(menuSelectAll)))
+        menu.addItem(.separator())
+        menu.addItem(item("Find…",         action: #selector(menuFind)))
+        menu.addItem(item("Replace…",      action: #selector(menuReplace)))
+        menu.addItem(item("Go to Line…",   action: #selector(menuGoToLine)))
+        menu.addItem(item("Go to File…",   action: #selector(menuGoToFile)))
+        menu.addItem(.separator())
+        menu.addItem(item("Word Wrap",     action: #selector(menuWordWrap)))
 
         return menu
     }
@@ -196,19 +203,45 @@ class TerminalViewController: NSViewController {
 
     // Ctrl codes 0x01–0x1A map directly to Ctrl+A through Ctrl+Z in MS Edit's
     // input parser (src/input.rs: the `..='\x1a'` arm shifts the byte to A–Z).
-    /// Explicitly copies SwiftTerm's current text selection to the clipboard.
-    /// SwiftTerm's own copy: method is @objc open and IS in the responder chain,
-    /// but calling it directly ensures it runs even if responder dispatch misroutes.
-    @objc func menuCopy() { terminalView.copy(self) }
 
-    @objc func menuNew()      { send("\u{0e}") }  // Ctrl+N
-    @objc func menuSave()     { send("\u{13}") }  // Ctrl+S
-    @objc func menuClose()    { send("\u{17}") }  // Ctrl+W
-    @objc func menuUndo()     { send("\u{1a}") }  // Ctrl+Z
-    @objc func menuRedo()     { send("\u{19}") }  // Ctrl+Y
-    @objc func menuFind()     { send("\u{06}") }  // Ctrl+F
-    @objc func menuReplace()  { send("\u{12}") }  // Ctrl+R
-    @objc func menuGoToLine() { send("\u{07}") }  // Ctrl+G
+    /// Copies SwiftTerm's current text selection to the clipboard, then trims
+    /// trailing whitespace from each line and trailing blank lines. SwiftTerm
+    /// pads terminal lines to the full column width, so raw copies include many
+    /// trailing spaces.
+    @objc func menuCopy() {
+        terminalView.copy(self)
+        if let raw = NSPasteboard.general.string(forType: .string) {
+            let lines = raw.components(separatedBy: "\n")
+            let trimmed = lines
+                .map { $0.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression) }
+                .joined(separator: "\n")
+                .replacingOccurrences(of: "\\n+$", with: "", options: .regularExpression)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(trimmed, forType: .string)
+        }
+    }
+
+    @objc func menuNew()        { send("\u{0e}") }  // Ctrl+N
+    @objc func menuSave()       { send("\u{13}") }  // Ctrl+S
+    @objc func menuClose()      { send("\u{17}") }  // Ctrl+W
+    @objc func menuUndo()       { send("\u{1a}") }  // Ctrl+Z
+    @objc func menuRedo()       { send("\u{19}") }  // Ctrl+Y
+    @objc func menuFind()       { send("\u{06}") }  // Ctrl+F
+    @objc func menuReplace()    { send("\u{12}") }  // Ctrl+R
+    @objc func menuGoToLine()   { send("\u{07}") }  // Ctrl+G
+    @objc func menuCut()        { send("\u{18}") }  // Ctrl+X
+    @objc func menuSelectAll()  { send("\u{01}") }  // Ctrl+A
+    @objc func menuWordWrap()   { send("\u{1b}z") } // Alt+Z (ESC z over PTY)
+    @objc func menuGoToFile()   { send("\u{10}") }  // Ctrl+P — Go to File dialog
+
+    /// Reads the system clipboard and injects the text directly into the PTY.
+    /// (Standard NSText.paste(_:) routes through the responder chain which does
+    /// not reach the PTY process.)
+    @objc func menuPaste() {
+        if let text = NSPasteboard.general.string(forType: .string) {
+            send(text)
+        }
+    }
 
     @objc func menuOpen() {
         // Show a native file picker, then inject the path via Go to File (Ctrl+P).

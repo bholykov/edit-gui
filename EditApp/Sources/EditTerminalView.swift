@@ -11,6 +11,14 @@ import SwiftTerm
 /// from outside the module).
 class EditTerminalView: LocalProcessTerminalView {
 
+    /// Hide NSScroller subviews immediately when they are inserted.
+    /// SwiftTerm calls addSubview(_:) in setupScroller(); catching it here means
+    /// the scroller is hidden from the first frame with no flash.
+    override func addSubview(_ view: NSView) {
+        super.addSubview(view)
+        if view is NSScroller { view.isHidden = true }
+    }
+
     override func layout() {
         super.layout()
         // SwiftTerm's NSScroller is repositioned (via autoresizingMask) on every
