@@ -1,8 +1,8 @@
 name: EditApp
 options:
-  bundleIdPrefix: com.yourcompany
+  bundleIdPrefix: com.editapp
   deploymentTarget:
-    macOS: "12.0"
+    macOS: "13.0"
   xcodeVersion: "15"
 
 packages:
@@ -14,7 +14,7 @@ targets:
   EditApp:
     type: application
     platform: macOS
-    deploymentTarget: "12.0"
+    deploymentTarget: "13.0"
     sources:
       - path: Sources
     resources:
@@ -31,8 +31,8 @@ targets:
         outputFiles:
           - $(SRCROOT)/Resources/edit
     settings:
-      PRODUCT_BUNDLE_IDENTIFIER: com.yourcompany.EditApp
+      PRODUCT_BUNDLE_IDENTIFIER: com.editapp.EditApp
       PRODUCT_NAME: EditApp
       SWIFT_VERSION: "5.9"
-      MACOSX_DEPLOYMENT_TARGET: "12.0"
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
       ENABLE_HARDENED_RUNTIME: YES

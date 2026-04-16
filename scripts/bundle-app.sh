@@ -44,6 +44,12 @@ else
     exit 1
 fi
 
+# Copy app icon if present (created via scripts/create-icon.sh).
+if [ -f "$EDITAPP/Resources/AppIcon.icns" ]; then
+    cp "$EDITAPP/Resources/AppIcon.icns" "$RESOURCES/AppIcon.icns"
+    echo "Icon: included AppIcon.icns"
+fi
+
 # Ad-hoc code sign — required on Apple Silicon, free (no Developer ID needed).
 codesign --force --deep --sign - "$APP"
 
